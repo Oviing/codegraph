@@ -6,11 +6,54 @@ build-backend = "setuptools.build_meta"
 name = "codegraph"
 version = "0.1.0"
 description = "Graph-based code understanding for LLM agents: fewer tokens, better answers"
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["tree-sitter>=0.23", "tree-sitter-language-pack", "mcp>=1.2"]
+license = { text = "MIT" }
+authors = [{ name = "codegraph contributors" }]
+keywords = ["code-graph", "tree-sitter", "mcp", "llm", "static-analysis"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+  "tree-sitter>=0.23",
+  "tree-sitter-language-pack",
+  # the server supports both the 1.x FastMCP and the 2.x MCPServer API
+  "mcp>=1.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+# semantic search: local embeddings (fastembed runs a small ONNX model, no network at query time)
+embed = ["fastembed>=0.4", "numpy>=1.24"]
+bench = ["pyyaml>=6"]
+pdf = ["pypdf>=4"]
 
 [project.scripts]
 codegraph = "codegraph.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/example/codegraph"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# make the suite runnable without an editable install: Python 3.13 ignores .pth files
+# inside hidden directories, so a `.venv` does not put src/ on the path on its own
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+# E501: line length is handled by the formatter; SIM905 fights readable word lists
+ignore = ["E501", "SIM905"]
+
+[tool.ruff.lint.per-file-ignores]
+# fixtures are deliberately not valid, minimal reproductions of real code
+"tests/fixtures/*" = ["ALL"]

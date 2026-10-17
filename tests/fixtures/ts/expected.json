@@ -1,0 +1,18 @@
+{
+  "true": [
+    ["src/base.ts:Widget", "src/base.ts:Base", "inherits"],
+    ["src/base.ts:Widget.run", "src/helper.ts:helper", "calls"],
+    ["src/helper.ts:Unrelated.go", "src/helper.ts:helper", "calls"],
+    ["src/use.ts:start", "src/base.ts:Widget", "calls"],
+    ["src/use.ts:start", "src/base.ts:Widget.run", "calls"],
+    ["src/use.ts:start", "src/helper.ts:helper", "calls"]
+  ],
+  "known_ambiguous": [
+    ["src/use.ts:start", "src/base.ts:Base.run", "calls"]
+  ],
+  "why_ambiguous": "`w.run()` matches Widget.run and the same-named method on the Base interface it implements; receiver types are not tracked.",
+  "imports": [
+    ["src/use.ts", "src/base.ts"],
+    ["src/use.ts", "src/helper.ts"]
+  ]
+}

@@ -2,92 +2,79 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
-try:  # mcp >= 2
-    from mcp.server.mcpserver import MCPServer as FastMCP
-except ImportError:  # mcp 1.x
-    from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from .indexer import index_repo
 from .queries import Graph
+from .tools import TOOLS
+
+try:  # mcp 1.x compatibility: FastMCP is the same object under its old name
+    from mcp.server.fastmcp import FastMCP
+except ImportError:  # pragma: no cover - mcp 2.x
+    FastMCP = MCPServer
 
 INSTRUCTIONS = (
     "Code graph for this repository. Prefer these tools over reading whole files: "
     "start with repo_map, find code with search, then call context(symbol) to get a symbol's source, "
     "the signatures it uses and who uses it in one compact response. Use impact(symbol) before changing "
-    "a function. Fall back to reading files only for exact surrounding code."
+    "a function, and similar(symbol) to find code that does the same thing under different names. "
+    "Fall back to reading files only for exact surrounding code."
 )
 
 
-def build(root: str | Path) -> FastMCP:
+def _log(msg: str):
+    """stderr only: stdout is the MCP transport."""
+    print(f"codegraph: {msg}", file=sys.stderr, flush=True)
+
+
+def build(root: str | Path, index: bool = True) -> MCPServer:
     root = Path(root).resolve()
-    mcp = FastMCP("codegraph", instructions=INSTRUCTIONS)
-    index_repo(root)  # incremental: only changed files are re-parsed
+    mcp = MCPServer("codegraph", instructions=INSTRUCTIONS)
+    if index:
+        _log(f"indexing {root} ...")
+        stats = index_repo(root, progress=lambda m: _log(m))
+        _log(f"indexed {stats['files']} files, {stats['symbols']} symbols, {stats['edges']} edges")
     graph = Graph(root)  # one long-lived graph: adjacency lists stay in memory
 
-    def g() -> Graph:
-        return graph
-
-    @mcp.tool()
-    def repo_map(prefix: str = "", max_tokens: int = 1500, focus: str = "") -> str:
-        """Ranked overview of the repo (PageRank). Pass focus="symbolA, some/file.py, auth flow" to rank by
-        closeness to what you are working on. Use prefix to zoom into a directory."""
-        return g().repo_map(prefix, max_tokens, focus)
-
-    @mcp.tool()
-    def search(query: str, limit: int = 10) -> str:
-        """Find symbols by name/words/docstring (camelCase and snake_case are split). Returns file:lines and signature."""
-        return g().search(query, limit)
-
-    @mcp.tool()
-    def outline(file: str) -> str:
-        """Symbol tree of one file (path suffix is enough) without its source."""
-        return g().outline(file)
-
-    @mcp.tool()
-    def context(symbol: str, max_tokens: int = 1500) -> str:
-        """Best first call for understanding a symbol: its source, signatures of what it uses, and its callers."""
-        return g().context(symbol, max_tokens)
-
-    @mcp.tool()
-    def related(symbol: str, max_tokens: int = 800) -> str:
-        """Symbols most closely connected to this one (direct and multi-hop), ranked, within a token budget."""
-        return g().related(symbol, max_tokens)
-
-    @mcp.tool()
-    def source(symbol: str) -> str:
-        """Exact source of one symbol only."""
-        return g().source(symbol)
-
-    @mcp.tool()
-    def callers(symbol: str, depth: int = 1) -> str:
-        """Who calls/uses/inherits from this symbol (depth>1 walks further up)."""
-        return g().callers(symbol, depth)
-
-    @mcp.tool()
-    def callees(symbol: str, depth: int = 1) -> str:
-        """What this symbol calls (depth>1 walks further down)."""
-        return g().callees(symbol, depth)
-
-    @mcp.tool()
-    def impact(symbol: str, depth: int = 3) -> str:
-        """Blast radius of changing a symbol, grouped by file."""
-        return g().impact(symbol, depth)
-
-    @mcp.tool()
-    def file_deps(file: str) -> str:
-        """What a file imports and which files import it."""
-        return g().deps(file)
-
-    @mcp.tool()
-    def reindex(force: bool = False) -> str:
-        """Re-scan the repo (incremental). Call after large edits made outside this session."""
-        r = index_repo(root, force)
-        graph.reload()
-        return f"{r['files']} files, {r['changed']} re-parsed, {r['symbols']} symbols, {r['edges']} edges"
+    for tool in TOOLS:
+        _register(mcp, tool, graph, root)
 
     return mcp
+
+
+def _register(mcp, tool, graph: Graph, root: Path):
+    """Expose one Tool spec. The signature is generated from the spec, annotations included,
+    so the advertised schema cannot drift from what the tool actually accepts."""
+    if tool.name == "reindex":
+        def reindex(force: bool = False) -> str:
+            r = index_repo(root, force)
+            graph.reload()
+            return (f"{r['files']} files, {r['changed']} re-parsed, "
+                    f"{r['symbols']} symbols, {r['edges']} edges")
+        reindex.__doc__ = tool.summary
+        mcp.tool(name=tool.name)(reindex)
+        return
+
+    def dispatch(**kwargs):
+        return getattr(graph, tool.name)(**kwargs)
+
+    params = tool.params
+    args = []
+    for p in params:
+        args.append(f"{p.name}: {p.type}" if p.default is None
+                    else f"{p.name}: {p.type} = {p.default!r}")
+    # keyword forwarding: the MCP runtime calls tools with keyword arguments
+    src = (f"def _{tool.name}({', '.join(args)}) -> str:\n"
+           f"    return _dispatch({', '.join(f'{n}={n}' for n in [p.name for p in params])})")
+    ns: dict = {"_dispatch": dispatch}
+    exec(compile(src, f"<tool {tool.name}>", "exec"), ns)
+    fn = ns[f"_{tool.name}"]
+    fn.__name__ = tool.name  # the MCP tool name must not inherit the underscore
+    fn.__doc__ = tool.summary
+    mcp.tool(name=tool.name)(fn)
 
 
 def main(root: str | None = None):

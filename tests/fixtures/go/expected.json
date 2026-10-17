@@ -1,0 +1,11 @@
+{
+  "true": [
+    ["app/main.go:Start", "app/main.go:Rect.Area", "calls"],
+    ["app/main.go:Start", "app/main.go:helper", "calls"]
+  ],
+  "known_ambiguous": [
+    ["app/main.go:Start", "app/main.go:Shape.Area", "calls"]
+  ],
+  "why_ambiguous": "`r.Area()` where r is *Rect also matches the identically named Shape.Area interface method, because the receiver type is not tracked.",
+  "imports": []
+}

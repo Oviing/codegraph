@@ -1,0 +1,10 @@
+{
+  "true": [
+    ["src/shape.cpp:Shape.area", "src/shape.cpp:helper", "calls"]
+  ],
+  "known_ambiguous": [],
+  "why_ambiguous": "",
+  "imports": [
+    ["src/shape.cpp", "src/shape.h"]
+  ]
+}

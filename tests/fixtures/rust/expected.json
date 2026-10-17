@@ -1,0 +1,9 @@
+{
+  "true": [
+    ["src/lib.rs:En", "src/lib.rs:Greet", "inherits"],
+    ["src/lib.rs:En.greet", "src/lib.rs:helper", "calls"]
+  ],
+  "known_ambiguous": [],
+  "why_ambiguous": "",
+  "imports": []
+}

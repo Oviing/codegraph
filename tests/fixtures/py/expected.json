@@ -1,0 +1,23 @@
+{
+  "true": [
+    ["app/core.py:Base.run", "app/util.py:shout", "calls"],
+    ["app/core.py:Child", "app/core.py:Base", "inherits"],
+    ["app/core.py:Child.other", "app/core.py:Child.run", "calls"],
+    ["app/core.py:Child.run", "app/core.py:Base.run", "calls"],
+    ["app/service.py:start", "app/core.py:Child", "calls"],
+    ["app/service.py:start", "app/core.py:Child.run", "calls"],
+    ["app/service.py:start", "app/util.py:whisper", "calls"],
+    ["app/util.py:whisper", "app/util.py:shout", "calls"]
+  ],
+  "known_ambiguous": [
+    ["app/core.py:Child.other", "app/core.py:Base.run", "calls"],
+    ["app/service.py:start", "app/core.py:Base.run", "calls"]
+  ],
+  "why_ambiguous": "`self.run()` / `c.run()` matches both the overriding method and the same-named method it overrides, because the receiver type is not tracked.",
+  "imports": [
+    ["app/core.py", "app/util.py"],
+    ["app/service.py", "app/__init__.py"],
+    ["app/service.py", "app/core.py"],
+    ["app/service.py", "app/util.py"]
+  ]
+}

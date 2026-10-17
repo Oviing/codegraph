@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codegraph"
+version = "0.1.0"
+description = "Graph-based code understanding for LLM agents: fewer tokens, better answers"
+requires-python = ">=3.10"
+dependencies = ["tree-sitter>=0.23", "tree-sitter-language-pack", "mcp>=1.2"]
+
+[project.scripts]
+codegraph = "codegraph.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

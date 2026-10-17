@@ -6,7 +6,7 @@ import math
 import re
 import sys
 import threading
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from pathlib import Path
 
 from .embed import load_embedder, load_matrix, symbol_text
@@ -17,6 +17,7 @@ from .store import Store, split_words
 
 CHARS_PER_TOKEN = 4
 PPR_MAX_NODES = 20_000
+NBR_CACHE_MAX = 20_000  # neighbour lists kept in memory (LRU)
 NEAR_CANDIDATES = 80
 # how much a non-structural link carries a random walk, relative to a call edge (1.0). Lower means
 # the walk prefers structure and only spills over the soft links when structure runs out.
@@ -88,7 +89,7 @@ class Graph:
             for a, b, w in self.db.execute("SELECT a, b, weight FROM file_links"):
                 fl[a].append((b, w))
                 fl[b].append((a, w))
-            self._out, self._in, self._ncache = out, inn, {}
+            self._out, self._in, self._ncache = out, inn, OrderedDict()
             self._lnk, self._fl, self._sem = lnk, fl, None
             self._ftok_cache.clear()
 
@@ -101,13 +102,17 @@ class Graph:
         """Undirected neighbours of u, each weighted down if it is a hub (IDF-style). Soft links
         (similar / tests / key) join the walk at a lower weight than call edges."""
         c = self._ncache.get(u)
-        if c is None:
+        if c is not None:
+            self._ncache.move_to_end(u)
+        else:
             def hub(v: int) -> float:
                 return 1.0 / math.log(2 + len(self._out.get(v, ())) + len(self._in.get(v, ())) + len(self._lnk.get(v, ())))
 
             c = [(v, hub(v)) for v in self._out.get(u, []) + self._in.get(u, [])]
             c += [(v, LINK_WEIGHT.get(kind, 0.3) * w * hub(v)) for v, kind, w, _, _ in self._lnk.get(u, ())]
             self._ncache[u] = c
+            if len(self._ncache) > NBR_CACHE_MAX:  # bounded: a long session must not cache the whole graph
+                self._ncache.popitem(last=False)
         return c
 
     @synchronized

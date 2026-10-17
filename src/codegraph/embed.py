@@ -132,12 +132,22 @@ def embed_pending(store: Store, embedder: Embedder, progress=None) -> list[int]:
 def load_matrix(db):
     """(ids, unit-norm float32 matrix) of every embedded symbol, or (None, None) when there are none."""
     import numpy as np
-    rows = db.execute("SELECT v.sym_id, c.vec FROM sym_vec v JOIN vec_cache c ON c.hash = v.hash "
-                      "ORDER BY v.sym_id").fetchall()
-    if not rows:
+    n = db.execute("SELECT COUNT(*) FROM sym_vec v JOIN vec_cache c ON c.hash = v.hash").fetchone()[0]
+    if not n:
         return None, None
-    ids = np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
-    mat = np.vstack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
+    ids = np.empty(n, dtype=np.int64)
+    mat = None
+    i = 0
+    # stream into a preallocated matrix: fetchall() + vstack would hold the vectors twice at peak
+    for sym_id, blob in db.execute("SELECT v.sym_id, c.vec FROM sym_vec v JOIN vec_cache c ON c.hash = v.hash "
+                                   "ORDER BY v.sym_id"):
+        vec = np.frombuffer(blob, dtype=np.float32)
+        if mat is None:
+            mat = np.empty((n, vec.shape[0]), dtype=np.float32)
+        ids[i], mat[i] = sym_id, vec
+        i += 1
+    if i != n:  # rows changed underneath us: trim rather than return uninitialised memory
+        ids, mat = ids[:i], mat[:i]
     return ids, mat
 
 

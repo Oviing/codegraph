@@ -7,6 +7,11 @@ Instead of reading whole files, the agent asks the graph.
 
 ## Install
 
+    pip install codegraph-mcp              # provides the `codegraph` command
+    pip install "codegraph-mcp[embed]"     # optional: semantic search, see "Hybrid search"
+
+From a checkout:
+
     pip install -e ".[dev]"     # drop [dev] if you don't need pytest/ruff
     pip install -e ".[embed]"   # optional: semantic search (fastembed + numpy), see "Hybrid search"
 

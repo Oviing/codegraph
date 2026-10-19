@@ -1,19 +1,27 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codegraph"
-version = "0.1.0"
+name = "codegraph-mcp"
+dynamic = ["version"]
 description = "Graph-based code understanding for LLM agents: fewer tokens, better answers"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "codegraph contributors" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Oviing" }]
 keywords = ["code-graph", "tree-sitter", "mcp", "llm", "static-analysis"]
 classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
 ]
 dependencies = [
   "tree-sitter>=0.23",
@@ -33,10 +41,17 @@ pdf = ["pypdf>=4"]
 codegraph = "codegraph.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/example/codegraph"
+Homepage = "https://github.com/Oviing/codegraph"
+Issues = "https://github.com/Oviing/codegraph/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "codegraph.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+codegraph = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

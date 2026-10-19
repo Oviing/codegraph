@@ -7,8 +7,8 @@ Instead of reading whole files, the agent asks the graph.
 
 ## Install
 
-    pip install codegraph-mcp              # provides the `codegraph` command
-    pip install "codegraph-mcp[embed]"     # optional: semantic search, see "Hybrid search"
+    pip install codegraph-network              # provides the `codegraph` command
+    pip install "codegraph-network[embed]"     # optional: semantic search, see "Hybrid search"
 
 From a checkout:
 

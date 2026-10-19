@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codegraph-mcp"
+name = "codegraph-network"
 dynamic = ["version"]
 description = "Graph-based code understanding for LLM agents: fewer tokens, better answers"
 readme = "README.md"

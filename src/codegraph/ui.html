@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Codegraph Explorer</title>
+<style>
+:root{--bg:#fafafa;--panel:#fff;--fg:#1a1a1a;--mute:#6b7280;--line:#d1d5db;--edge:#9ca3af;--acc:#2563eb;--hot:#dc2626;--code:#f3f4f6}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--panel:#171a21;--fg:#e5e7eb;--mute:#9ca3af;--line:#2d333d;--edge:#6b7280;--acc:#60a5fa;--hot:#f87171;--code:#0b0d11}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,sans-serif;overflow:hidden}
+#top{position:fixed;left:0;right:0;top:0;height:44px;display:flex;gap:8px;align-items:center;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);z-index:5}
+#top b{margin-right:4px}
+input,select,button{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 9px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+button.on{border-color:var(--acc);color:var(--acc)}
+#q{width:260px}
+#res{position:fixed;top:44px;left:96px;width:380px;max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;display:none;z-index:6}
+#res div{padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line)}#res div:hover{background:var(--code)}
+#res small,.mute{color:var(--mute)}
+#wrap{position:fixed;left:0;top:44px;bottom:0;right:380px}
+canvas{display:block;width:100%;height:100%;cursor:grab}
+canvas.drag{cursor:grabbing}
+#side{position:fixed;top:44px;right:0;bottom:0;width:380px;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:14px}
+#side h3{margin:0 0 2px;word-break:break-all}
+#side pre{background:var(--code);padding:10px;border-radius:6px;overflow:auto;max-height:340px;font:12px/1.45 ui-monospace,Menlo,monospace}
+#side .btns{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+#side .nb{padding:3px 0;cursor:pointer;word-break:break-all}#side .nb:hover{color:var(--acc)}
+#side h4{margin:14px 0 4px;color:var(--mute);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.04em}
+#hud{position:fixed;left:12px;bottom:10px;color:var(--mute);background:var(--bg);padding:4px 8px;border-radius:6px;opacity:.92;pointer-events:none}
+#tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--line);padding:3px 8px;border-radius:5px;display:none;z-index:7;max-width:50ch;word-break:break-all}
+@media (max-width:800px){#side{width:100%;top:auto;height:45%}#wrap{right:0;bottom:45%}}
+</style></head><body>
+<div id="top"><b>Codegraph</b>
+ <input id="q" placeholder="Search a symbol and add it to the graph" autocomplete="off">
+ <button id="fit" title="Zoom to fit everything">Fit</button>
+ <button id="unpin" title="Release all dragged nodes">Unpin all</button>
+ <button id="reset" title="Back to the file overview">Reset</button>
+ <select id="color" title="Colour by"><option value="c">colour: community</option><option value="d">colour: folder</option></select>
+ <button id="lbl" class="on" title="Show labels">Labels</button>
+</div>
+<div id="res"></div>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="side"></div>
+<div id="hud"></div><div id="tip"></div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id), cv=$('c'), cx=cv.getContext('2d'), side=$('side'), tip=$('tip'), hud=$('hud');
+const api=(p,q={})=>fetch('/api/'+p+'?'+new URLSearchParams(q)).then(r=>r.json());
+const el=(t,props={},...kids)=>{const e=document.createElement(t);Object.assign(e,props);kids.forEach(k=>e.append(k));return e};
+
+// ---- state ------------------------------------------------------------------------------------
+let nodes=new Map(), links=[], fileLinks=[], symEdges=new Map(), symInfo=new Map(), total=0;
+let sel=null, hov=null, impact=new Set(), alpha=1, ticks=0, auto=true, showLabels=true, colorBy='c', dirty=true;
+const cam={x:0,y:0,k:1}; let W=0,H=0;
+const dpr=devicePixelRatio||1;
+let css={};
+function readCss(){const s=getComputedStyle(document.documentElement);['bg','fg','mute','edge','acc','hot','line'].forEach(k=>css[k]=s.getPropertyValue('--'+k).trim())}
+matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{readCss();dirty=true});readCss();
+
+function resize(){const r=cv.getBoundingClientRect();W=r.width;H=r.height;cv.width=W*dpr;cv.height=H*dpr;dirty=true}
+addEventListener('resize',resize);resize();
+
+// ---- colours ----------------------------------------------------------------------------------
+const hue=n=>`hsl(${(n*137.5)%360},62%,52%)`;
+function hash(s){let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))|0;return Math.abs(h)}
+const dir=f=>f.split('/').slice(0,-1).slice(0,2).join('/')||'.';
+function colorOf(n){
+  if(colorBy==='d')return hue(hash(dir(n.file)));
+  return n.c<0?'#9ca3af':hue(n.c)}
+
+// ---- graph building ---------------------------------------------------------------------------
+const rnd=()=>(Math.random()-.5);
+function addFile(f){
+  nodes.set('f:'+f.id,{key:'f:'+f.id,t:'f',label:f.id.split('/').pop(),file:f.id,c:f.c,n:f.n,loc:f.loc,rank:f.rank,
+    r:7+Math.sqrt(f.n)*1.7,x:rnd()*W*.8,y:rnd()*H*.8,vx:0,vy:0})}
+function symNode(s,ax,ay){
+  const k='s:'+s.id;symInfo.set(s.id,s);
+  if(nodes.has(k))return nodes.get(k);
+  const n={key:k,t:'s',id:s.id,label:s.name,file:s.file,c:s.c,kind:s.kind,rank:s.rank,
+    r:3.5+Math.min(14,Math.sqrt(s.rank*2500)),x:ax+rnd()*40,y:ay+rnd()*40,vx:0,vy:0};
+  nodes.set(k,n);return n}
+const touched=f=>{for(const n of nodes.values())if(n.t==='s'&&n.file===f)return true;return false};
+function entity(id){
+  const k='s:'+id;if(nodes.has(k))return nodes.get(k);
+  const s=symInfo.get(id);return s&&nodes.get('f:'+s.file)||null}
+function rebuild(){
+  const m=new Map(), tf=new Set();
+  for(const n of nodes.values())if(n.t==='s')tf.add(n.file);
+  const add=(a,b,w,k,q)=>{if(!a||!b||a===b)return;const key=a.key+'>'+b.key,o=m.get(key);
+    if(o){o.w+=w;if(q==='extracted')o.q=q}else m.set(key,{a,b,w,k,q})};
+  for(const l of fileLinks)if(!tf.has(l.s)&&!tf.has(l.t))add(nodes.get('f:'+l.s),nodes.get('f:'+l.t),l.w,l.k,l.k==='import'?'import':'extracted');
+  for(const e of symEdges.values())add(entity(e.s),entity(e.t),1,e.k,e.q);
+  links=[...m.values()];dirty=true}
+function reheat(a=.5){alpha=Math.max(alpha,a);dirty=true}
+
+async function loadOverview(){
+  nodes=new Map();symEdges=new Map();symInfo=new Map();sel=null;impact=new Set();auto=true;ticks=0;
+  hud.textContent='loading...';
+  const d=await api('overview');
+  total=d.total;fileLinks=d.links;d.files.forEach(f=>{fileMeta.set(f.id,f);addFile(f)});rebuild();reheat(1);panel();status()}
+function status(){
+  const ns=[...nodes.values()].filter(n=>n.t==='s').length, nf=nodes.size-ns;
+  hud.textContent=`${nf} files, ${ns} symbols shown · ${total} files indexed · drag a node to pin it · double-click to expand · wheel to zoom · drag background to pan`}
+
+async function expandFile(path){
+  const d=await api('file',{path});const fn=nodes.get('f:'+path);
+  const ax=fn?fn.x:0, ay=fn?fn.y:0;
+  d.symbols.forEach(s=>symNode(s,ax,ay));d.far.forEach(s=>symInfo.set(s.id,s));
+  d.edges.forEach(e=>symEdges.set(e.s+'>'+e.t+e.k,e));
+  nodes.delete('f:'+path);rebuild();reheat(.8);status();return d}
+function collapseFile(path){
+  let x=0,y=0,c=0;
+  for(const [k,n] of nodes)if(n.t==='s'&&n.file===path){x+=n.x;y+=n.y;c++;nodes.delete(k)}
+  if(!c)return;
+  const info=fileMeta.get(path)||{id:path,n:c,loc:0,rank:0,c:-1};
+  addFile(info);const n=nodes.get('f:'+path);n.x=x/c;n.y=y/c;
+  if(sel&&!nodes.has(sel))sel='f:'+path;
+  rebuild();reheat(.5);status();panel()}
+const fileMeta=new Map();
+async function expandSymbol(id){
+  const d=await api('symbol',{id});if(d.error)return;
+  const me=symNode(d,W/2,H/2);
+  d.far.sort((a,b)=>b.rank-a.rank).slice(0,40).forEach(s=>symNode(s,me.x,me.y));
+  d.edges.forEach(e=>symEdges.set(e.s+'>'+e.t+e.k,e));
+  rebuild();reheat(.7);status();return d}
+async function showImpact(id){
+  const d=await api('impact',{id});impact=new Set([id]);
+  d.symbols.forEach(s=>{symNode(s,nodes.get('s:'+id).x,nodes.get('s:'+id).y);impact.add(s.id)});
+  d.edges.forEach(e=>symEdges.set(e.s+'>'+e.t+e.k,e));
+  rebuild();reheat(.7);status();panel()}
+
+// ---- force layout -----------------------------------------------------------------------------
+function step(){
+  const arr=[...nodes.values()], n=arr.length;
+  const cen=new Map();  // symbols of one file are pulled together so an expanded file reads as a cluster
+  for(const a of arr)if(a.t==='s'){const c=cen.get(a.file)||(cen.set(a.file,{x:0,y:0,n:0}),cen.get(a.file));c.x+=a.x;c.y+=a.y;c.n++}
+  for(let i=0;i<n;i++){const a=arr[i];
+    for(let j=i+1;j<n;j++){const b=arr[j];let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy+.01;
+      if(d2<90000){const f=(1400+(a.r+b.r)*30)/d2;dx*=f;dy*=f;a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy}}
+    a.vx-=a.x*.004;a.vy-=a.y*.004;
+    if(a.t==='s'){const c=cen.get(a.file);if(c.n>1){a.vx+=(c.x/c.n-a.x)*.01;a.vy+=(c.y/c.n-a.y)*.01}}}
+  for(const l of links){const a=l.a,b=l.b;let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;
+    const rest=a.r+b.r+(a.t==='s'&&a.file===b.file?22:70),f=(d-rest)*.012*(l.q==='extracted'?1:.6);
+    dx*=f/d;dy*=f/d;a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy}
+  for(const a of arr){
+    if(a.pin){a.vx=a.vy=0;continue}
+    a.vx*=.8;a.vy*=.8;a.x+=a.vx*alpha;a.y+=a.vy*alpha}
+  alpha=Math.max(.0,alpha*.985);ticks++;
+  if(auto&&nodes.size&&(ticks===60||alpha<.013)){fit()}}
+
+// ---- drawing ----------------------------------------------------------------------------------
+const toS=(x,y)=>[(x-cam.x)*cam.k+W/2,(y-cam.y)*cam.k+H/2], toW=(x,y)=>[(x-W/2)/cam.k+cam.x,(y-H/2)/cam.k+cam.y];
+function fit(){
+  if(!nodes.size)return;let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const n of nodes.values()){x0=Math.min(x0,n.x-n.r);x1=Math.max(x1,n.x+n.r);y0=Math.min(y0,n.y-n.r);y1=Math.max(y1,n.y+n.r)}
+  cam.k=Math.min(2.5,.9*Math.min(W/(x1-x0||1),H/(y1-y0||1)));cam.x=(x0+x1)/2;cam.y=(y0+y1)/2;dirty=true}
+function neighbours(key){const s=new Set([key]);for(const l of links){if(l.a.key===key)s.add(l.b.key);if(l.b.key===key)s.add(l.a.key)}return s}
+function arrow(x,y,ang,sz){cx.beginPath();cx.moveTo(x,y);cx.lineTo(x-sz*Math.cos(ang-.45),y-sz*Math.sin(ang-.45));
+  cx.lineTo(x-sz*Math.cos(ang+.45),y-sz*Math.sin(ang+.45));cx.closePath();cx.fill()}
+function draw(){
+  cx.setTransform(dpr,0,0,dpr,0,0);cx.clearRect(0,0,W,H);
+  const focus=sel&&nodes.has(sel)?neighbours(sel):null, k=cam.k;
+  // soft hulls around expanded files
+  const groups=new Map();
+  for(const n of nodes.values())if(n.t==='s'){const g=groups.get(n.file)||(groups.set(n.file,{x:0,y:0,n:0,m:[]}),groups.get(n.file));g.x+=n.x;g.y+=n.y;g.n++;g.m.push(n)}
+  for(const [f,g] of groups){const mx=g.x/g.n,my=g.y/g.n;let r=0;g.m.forEach(m=>r+=Math.hypot(m.x-mx,m.y-my));r=r/g.n*1.5+10;
+    const [sx,sy]=toS(mx,my);cx.globalAlpha=.07;cx.fillStyle=colorOf(g.m[0]);cx.beginPath();cx.arc(sx,sy,(r+14)*k,0,6.3);cx.fill();
+    cx.globalAlpha=.7;cx.fillStyle=css.mute;cx.font='11px system-ui';cx.textAlign='center';cx.fillText(f.split('/').pop(),sx,sy-(r+18)*k)}
+  for(const l of links){
+    const on=!focus||(focus.has(l.a.key)&&focus.has(l.b.key)), imp=impact.size&&l.a.id!==undefined&&impact.has(l.a.id)&&impact.has(l.b.id);
+    const [ax,ay]=toS(l.a.x,l.a.y),[bx,by]=toS(l.b.x,l.b.y);
+    cx.globalAlpha=on?(imp?.9:focus?.6:.3):.04;cx.strokeStyle=cx.fillStyle=imp?css.hot:css.edge;
+    cx.lineWidth=Math.min(5,1+Math.log2(l.w))*(imp?1.6:1);
+    cx.setLineDash(l.k==='import'?[1,4]:l.q==='extracted'?[]:[5,4]);
+    cx.beginPath();cx.moveTo(ax,ay);cx.lineTo(bx,by);cx.stroke();
+    if(l.k!=='import'&&k>.35){cx.setLineDash([]);const ang=Math.atan2(by-ay,bx-ax),rr=l.b.r*k+1;arrow(bx-Math.cos(ang)*rr,by-Math.sin(ang)*rr,ang,6)}}
+  cx.setLineDash([]);
+  for(const n of nodes.values()){
+    const [sx,sy]=toS(n.x,n.y), r=n.r*k, dim=focus&&!focus.has(n.key);
+    cx.globalAlpha=dim?.12:1;cx.fillStyle=colorOf(n);
+    cx.beginPath();
+    if(n.t==='f'){const s=Math.max(r*1.6,4);cx.roundRect(sx-s/2,sy-s/2,s,s,s*.22)}else cx.arc(sx,sy,Math.max(r,1.5),0,6.3);
+    cx.fill();
+    if(n.pin){cx.strokeStyle=css.fg;cx.lineWidth=1.2;cx.stroke()}
+    if(n.key===sel||n.key===hov||(n.t==='s'&&impact.has(n.id))){cx.strokeStyle=n.key===sel?css.acc:css.hot;cx.lineWidth=2.5;cx.beginPath();
+      cx.arc(sx,sy,Math.max(r,3)+(n.t==='f'?r*.4:2)+2,0,6.3);cx.stroke()}
+    const show=showLabels&&!dim&&(n.key===sel||n.key===hov||(focus&&focus.has(n.key))||k>1.5||(n.t==='f'&&(n.r>13||nodes.size<80))||(n.t==='s'&&k>.9&&n.r>7));
+    if(show){cx.globalAlpha=1;cx.fillStyle=css.fg;cx.font=(n.key===sel?'bold ':'')+'12px system-ui';cx.textAlign='left';cx.fillText(n.label,sx+Math.max(r,3)+4,sy+4)}}
+  cx.globalAlpha=1}
+(function loop(){if(alpha>.012){step();dirty=true}if(dirty){draw();dirty=false}requestAnimationFrame(loop)})();
+
+// ---- interaction ------------------------------------------------------------------------------
+function pick(ev){const r=cv.getBoundingClientRect(),[wx,wy]=toW(ev.clientX-r.left,ev.clientY-r.top);let best=null,bd=1e9;
+  for(const n of nodes.values()){const d=Math.hypot(n.x-wx,n.y-wy),rr=Math.max(n.r,4/cam.k)+3/cam.k;if(d<rr&&d<bd){bd=d;best=n}}return best}
+let drag=null, pan=null, moved=false;
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);moved=false;const n=pick(e);
+  if(n){drag=n;cv.classList.add('drag')}else{pan={x:e.clientX,y:e.clientY,cx:cam.x,cy:cam.y};cv.classList.add('drag')}});
+cv.addEventListener('pointermove',e=>{const r=cv.getBoundingClientRect();
+  if(drag){moved=true;auto=false;const [wx,wy]=toW(e.clientX-r.left,e.clientY-r.top);drag.x=wx;drag.y=wy;drag.pin=true;reheat(.25);return}
+  if(pan){moved=true;auto=false;cam.x=pan.cx-(e.clientX-pan.x)/cam.k;cam.y=pan.cy-(e.clientY-pan.y)/cam.k;dirty=true;return}
+  const n=pick(e);if(n&&n.key!==hov||!n&&hov){hov=n?n.key:null;dirty=true}
+  if(n){tip.textContent=n.t==='f'?`${n.file}  (${n.n} symbols, ${n.loc} loc)`:`${n.kind} ${symInfo.get(n.id).qn}  ${n.file}`;
+    tip.style.display='block';tip.style.left=e.clientX+14+'px';tip.style.top=e.clientY+14+'px'}else tip.style.display='none'});
+cv.addEventListener('pointerup',e=>{cv.classList.remove('drag');
+  if(drag&&!moved){select(drag.key)}else if(!drag&&pan&&!moved){select(null)}
+  drag=pan=null});
+cv.addEventListener('dblclick',async e=>{const n=pick(e);if(!n)return;n.pin=false;
+  if(n.t==='f')await expandFile(n.file);else await expandSymbol(n.id);select(n.t==='f'?null:n.key)});
+cv.addEventListener('wheel',e=>{e.preventDefault();auto=false;const r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+  const [wx,wy]=toW(mx,my);cam.k=Math.min(8,Math.max(.05,cam.k*Math.exp(-e.deltaY*.0015)));
+  cam.x=wx-(mx-W/2)/cam.k;cam.y=wy-(my-H/2)/cam.k;dirty=true},{passive:false});
+$('fit').onclick=()=>{auto=true;fit()};
+$('unpin').onclick=()=>{nodes.forEach(n=>n.pin=false);reheat(.6)};
+$('reset').onclick=()=>loadOverview();
+$('color').onchange=e=>{colorBy=e.target.value;dirty=true};
+$('lbl').onclick=e=>{showLabels=!showLabels;e.target.classList.toggle('on',showLabels);dirty=true};
+
+// ---- side panel -------------------------------------------------------------------------------
+function select(key){sel=key;dirty=true;panel()}
+function btn(text,fn,title=''){return el('button',{textContent:text,title,onclick:fn})}
+async function focusSymbol(id,s){  // bring any symbol into the graph and select it
+  if(!nodes.has('s:'+id)){if(s)symInfo.set(id,s);await expandSymbol(id)}
+  const n=nodes.get('s:'+id);if(n){cam.x=n.x;cam.y=n.y;cam.k=Math.max(cam.k,1);select(n.key)}}
+async function panel(){
+  side.replaceChildren();const n=sel&&nodes.get(sel);
+  if(!n){side.append(el('h3',{textContent:'Explore'}),el('p',{className:'mute',textContent:
+    'Each square is a file, sized by symbol count; lines are calls and imports between files. Double-click a file to open it into its functions and classes, double-click a function to pull in everything it calls and everything that calls it. Drag nodes to rearrange and pin them. Search to jump straight to a symbol.'}));return}
+  if(n.t==='f'){
+    side.append(el('h3',{textContent:n.file}),el('div',{className:'mute',textContent:`${n.n} symbols · ${n.loc} lines`}),
+      el('div',{className:'btns'},btn('Expand into symbols',async()=>{await expandFile(n.file);select(null)}),
+        btn(n.pin?'Unpin':'Pin',()=>{n.pin=!n.pin;reheat(.1);panel()})));
+    const near=[];links.forEach(l=>{if(l.a===n)near.push([l.b,'→',l.w]);else if(l.b===n)near.push([l.a,'←',l.w])});
+    if(near.length){side.append(el('h4',{textContent:'Connected files'}));
+      near.sort((a,b)=>b[2]-a[2]).slice(0,25).forEach(([o,d,w])=>side.append(el('div',{className:'nb',textContent:`${d} ${o.file||o.label}  ×${w}`,onclick:()=>{if(o.t==='f'||o.t==='s')select(o.key)}})))}
+    return}
+  const d=await api('symbol',{id:n.id});if(sel!==n.key)return;
+  side.append(el('h3',{textContent:d.qn}),el('div',{className:'mute',textContent:`${d.kind} · ${d.file}:${d.l1}-${d.l2}`}));
+  if(d.sig)side.append(el('div',{style:'margin-top:6px;font-family:ui-monospace,Menlo,monospace;word-break:break-all',textContent:d.sig}));
+  if(d.doc)side.append(el('p',{className:'mute',textContent:d.doc.slice(0,400)}));
+  side.append(el('div',{className:'btns'},
+    btn('Expand neighbours',async()=>{await expandSymbol(n.id);panel()},'pull in callers and callees'),
+    btn(impact.has(n.id)&&impact.size>1?'Hide impact':'Show impact',async()=>{if(impact.size>1){impact=new Set();dirty=true;panel()}else await showImpact(n.id)},'transitive callers: what breaks if this changes'),
+    btn('Collapse file',()=>collapseFile(n.file),'fold this file back into one node'),
+    btn(n.pin?'Unpin':'Pin',()=>{n.pin=!n.pin;reheat(.1);panel()})));
+  const info=id=>symInfo.get(id)||d.far.find(s=>s.id===id);
+  const callers=d.edges.filter(e=>e.t===n.id).map(e=>[info(e.s),e]), callees=d.edges.filter(e=>e.s===n.id).map(e=>[info(e.t),e]);
+  const list=(title,rows)=>{if(!rows.length)return;side.append(el('h4',{textContent:`${title} (${rows.length})`}));
+    rows.slice(0,40).forEach(([s,e])=>s&&side.append(el('div',{className:'nb',onclick:()=>focusSymbol(s.id,s),
+      textContent:`${s.qn}${e.q&&e.q!=='extracted'?'  ?':''}   ${s.file}`})))};
+  list('Called by',callers);list('Calls / uses',callees);
+  side.append(el('h4',{textContent:'Source'}),el('pre',{textContent:d.source||'(no source)'}))}
+
+// ---- search -----------------------------------------------------------------------------------
+let tm;const res=$('res');
+$('q').addEventListener('input',e=>{clearTimeout(tm);const v=e.target.value.trim();
+  if(!v){res.style.display='none';return}
+  tm=setTimeout(async()=>{const d=await api('search',{q:v});res.replaceChildren();
+    d.symbols.forEach(s=>res.append(el('div',{onclick:()=>{res.style.display='none';focusSymbol(s.id,s)}},
+      el('span',{textContent:s.qn}),el('small',{textContent:`  ${s.kind} · ${s.file}`}))));
+    if(!d.symbols.length)res.append(el('div',{className:'mute',textContent:'no matches'}));res.style.display='block'},180)});
+addEventListener('keydown',e=>{if(e.key==='Escape'){res.style.display='none';select(null)}if(e.key==='/'&&document.activeElement!==$('q')){e.preventDefault();$('q').focus()}});
+
+loadOverview();
+</script></body></html>

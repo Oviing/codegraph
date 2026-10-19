@@ -44,6 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("-r", "--root", default=".", help="repository root (default: cwd)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("serve", help="run the MCP server over stdio")
+    ui = sub.add_parser("ui", help="open an interactive graph explorer in the browser (local only)")
+    ui.add_argument("--port", type=int, default=0, help="port to listen on (default: any free port)")
+    ui.add_argument("--no-open", action="store_true", help="print the URL instead of opening a browser")
     bench = sub.add_parser("bench", help="measure tokens and recall (lexical vs hybrid) on a tasks file")
     bench.add_argument("tasks", help="YAML/JSON list of {task: ..., expect: [symbols]}")
     bench.add_argument("-k", type=int, default=10, help="results per search (default 10)")
@@ -93,6 +96,10 @@ def main(argv=None):
     if args.cmd == "serve":
         from .server import main as serve
         return serve(args.root)
+
+    if args.cmd == "ui":
+        from .ui import serve as ui_serve
+        return ui_serve(args.root, args.port, not args.no_open)
 
     if args.cmd == "bench":
         from .bench import run as bench

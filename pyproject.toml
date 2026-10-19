@@ -51,7 +51,7 @@ version = { attr = "codegraph.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-codegraph = ["py.typed"]
+codegraph = ["py.typed", "ui.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

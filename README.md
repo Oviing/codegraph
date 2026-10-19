@@ -26,6 +26,17 @@ Or in any MCP client config:
 The index lives in `<repo>/.codegraph/graph.db` and updates incrementally on every server start;
 `reindex` re-scans after edits made outside the session. `.gitignore` it.
 
+## Explore visually
+
+    codegraph -r /path/to/repo ui
+
+Opens an interactive map of the repo in your browser (served from `127.0.0.1` only, nothing leaves your machine).
+You start from the file-level network: lines are calls and imports between files, colour is community (or folder).
+Drag nodes to rearrange and pin them, scroll to zoom, drag the background to pan. Double-click a file to open it
+into its functions and classes; double-click a symbol to pull in everything it calls and everything that calls it.
+The side panel shows the source, callers and callees (click to jump), and **Show impact** highlights the transitive
+callers, i.e. what breaks if the symbol changes. Press `/` to search.
+
 ## Tools
 
 | Tool | Use it to |

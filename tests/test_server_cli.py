@@ -90,7 +90,7 @@ def test_cli_exposes_every_tool():
     assert subactions, "no subcommands registered"
     names = set(subactions[0].choices)
     from codegraph.cli import CLI_SPELLINGS
-    expected = {"serve", "bench", "install", "hook"} | {spelling for spellings in CLI_SPELLINGS.values() for spelling in spellings}
+    expected = {"serve", "ui", "bench", "install", "hook"} | {spelling for spellings in CLI_SPELLINGS.values() for spelling in spellings}
     assert names == expected
     # documented aliases must keep working
     assert {"map"} <= names

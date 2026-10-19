@@ -31,7 +31,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+# numpy: the semantic tests run on a fake embedder (tests/fake_embed.py) that needs it
+dev = ["pytest>=8", "ruff>=0.6", "numpy>=1.24"]
 # semantic search: local embeddings (fastembed runs a small ONNX model, no network at query time)
 embed = ["fastembed>=0.4", "numpy>=1.24"]
 bench = ["pyyaml>=6"]

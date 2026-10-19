@@ -31,11 +31,32 @@ The index lives in `<repo>/.codegraph/graph.db` and updates incrementally on eve
     codegraph -r /path/to/repo ui
 
 Opens an interactive map of the repo in your browser (served from `127.0.0.1` only, nothing leaves your machine).
-You start from the file-level network: lines are calls and imports between files, colour is community (or folder).
-Drag nodes to rearrange and pin them, scroll to zoom, drag the background to pan. Double-click a file to open it
-into its functions and classes; double-click a symbol to pull in everything it calls and everything that calls it.
-The side panel shows the source, callers and callees (click to jump), and **Show impact** highlights the transitive
-callers, i.e. what breaks if the symbol changes. Press `/` to search.
+Everything is computed from the existing index with the standard library; no extra dependencies.
+
+**Start from communities, zoom to code.** The first view is the community map: groups of symbols that are tightly
+linked to each other, found with Louvain modularity clustering (the *clusters* slider merges or splits them). Double-click
+a community to open it into files, a file into its symbols, a symbol to pull in what it calls and what calls it.
+Drag nodes to rearrange and pin them; scroll to zoom. Click a community for cohesion, key symbols and its most
+linked neighbours. The legend isolates a community with one click.
+
+**Lenses** colour the graph by a graph-theory metric:
+
+| Lens | Algorithm | Shows |
+|---|---|---|
+| importance | PageRank | what many others lean on |
+| bottlenecks | betweenness centrality (sampled on big graphs) | symbols most paths run through |
+| cycles | strongly connected components | circular dependencies between symbols and files |
+| layers | condensation + longest path | callers on top, callees below |
+| coupling / misplaced | cross-community link ratio | symbols that belong with another community |
+| core vs periphery | k-core decomposition | the dense kernel vs leaf code |
+| dead code | zero in-degree + no unresolved references | candidates nothing calls |
+| hotspots | git co-change x importance | central code that also changes a lot |
+
+**Layouts:** force, grouped by community, layered (callers on top), radial around the selection.
+**Filters:** minimum link weight, certain-only links, hops from the selection, tests, kind, folder.
+**Tools:** *Show impact* (transitive callers), *Path* between two symbols (shortest call chain), *Surprises*
+(certain links between different communities and folders), *Save / Compare snapshot* (which symbols changed
+community since you saved), and export to PNG, SVG or JSON. Press `/` to search.
 
 ## Tools
 

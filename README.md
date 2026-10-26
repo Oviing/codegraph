@@ -147,6 +147,12 @@ PageRank behind `context` / `related` / `repo_map(focus=)` at a lower weight tha
 | co-change | `git log --name-only` (last 1000 commits, commits over 30 files ignored, pairs need 3+ co-changes); shown by `deps` and used by `repo_map`'s ranking. No git or no history: no edges | git |
 | `similar` | top-5 nearest neighbours by embedding cosine >= 0.85, skipping pairs already linked by a call/inheritance, overloads, and test-to-test pairs | embed extra |
 
+**Roles** are a ranking prior for hybrid search, derived at query time from the name and path (nothing is stored, no
+reindex): `public` code ranks ahead of `private` helpers (`_name`), `native` code in another language than the
+repo's main one (C++ in a Python repo) and `generated` stubs (`*_pb2.py`). They only reorder equally relevant hits and
+never hide a symbol; spelling an underscore name in the query (`_split`) switches the demotion off for it.
+`CODEGRAPH_ROLES=off` disables them. Structural tools (`callers`, `callees`, `impact`) are unaffected.
+
 **Semantic search** is optional: `pip install codegraph[embed]` (fastembed + numpy). Each function / method /
 class / type is embedded from its name as words, qualified name, signature and doc line with a small local
 ONNX model (`BAAI/bge-small-en-v1.5`); there is no network access at query time, the model files are
@@ -184,7 +190,7 @@ The similarity threshold (0.85) was set on codegraph's own code: bge-small cosin
 
 ## Tests
 
-    pytest              # 232 tests
+    pytest              # 259 tests
     pytest tests/test_edges.py -rA      # per-language edge precision/recall report
 
 `tests/fixtures/<lang>/expected.json` holds hand-verified edges per language. Each fixture lists

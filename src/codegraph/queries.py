@@ -9,6 +9,7 @@ import threading
 from collections import defaultdict, deque
 from pathlib import Path
 
+from . import roles
 from .embed import load_embedder, load_matrix, symbol_text
 from .indexer import db_path
 from .links import is_test_path
@@ -76,6 +77,7 @@ class Graph:
     def reload(self):
         """Load adjacency lists into memory (ids only, cheap). Call after the index changes."""
         with self._lock:
+            self._repo_lang = roles.dominant_lang(r[0] for r in self.db.execute("SELECT path FROM files"))
             out, inn = defaultdict(list), defaultdict(list)
             for src, dst in self.db.execute("SELECT src, dst FROM edges"):
                 out[src].append(dst)
@@ -350,6 +352,11 @@ class Graph:
             test = i in rows and is_test_path(rows[i]["file"])
             score[i] += (TEST_DAMPING if test else 1.0) / (RRF_K + rank)
             seen_sem.add(i)
+        if roles.enabled():  # public API before private helpers, native code and generated stubs
+            for i in score:
+                if i in rows:
+                    score[i] *= roles.prior(rows[i]["file"], rows[i]["qualname"] or rows[i]["name"],
+                                            self._repo_lang, query)
         best = sorted(score, key=lambda i: -score[i])[:limit]
         return [(rows[i], "both" if i in seen_lex and i in seen_sem else "semantic" if i in seen_sem else "lexical")
                 for i in best if i in rows]

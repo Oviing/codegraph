@@ -8,6 +8,7 @@ import pytest
 
 from codegraph.indexer import index_repo
 from codegraph.queries import Graph, like, toks
+from tests.conftest import make_repo
 
 FILES = {
     "app/__init__.py": "",
@@ -246,3 +247,14 @@ def test_empty_index_reports_emptiness():
         assert "Index is empty" in g.repo_map()  # nothing ranked yet, no resolve has run
     finally:
         g.close()
+
+
+def test_deps_resolves_an_exact_path_with_underscores(tmp_path):
+    # `_suffix` already escapes for LIKE; escaping beforehand made `pkg/_src/my_mod.py` match nothing
+    root = make_repo(tmp_path, {"pkg/_src/my_mod.py": "def f():\n    return 1\n",
+                                "pkg/_src/other_mod.py": "from pkg._src.my_mod import f\n\ndef g():\n    return f()\n"})
+    index_repo(root)
+    g = Graph(root)
+    out = g.deps("pkg/_src/my_mod.py")
+    assert out.splitlines()[0] == "pkg/_src/my_mod.py" and "pkg/_src/other_mod.py" in out
+    assert g.deps("_src/my_mod.py").startswith("pkg/_src/my_mod.py")  # partial path too

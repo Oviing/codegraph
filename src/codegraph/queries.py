@@ -597,7 +597,7 @@ class Graph:
     @synchronized
     def _resolve_file(self, term: str) -> str | None:
         """Prefer an exact path, then a unique suffix, then the shortest unique suffix match."""
-        t = like(term.strip().lstrip("./"))
+        t = term.strip().lstrip("./")  # raw: `_suffix` escapes it for LIKE, and the exact match must not
         exact = self.db.execute("SELECT path FROM files WHERE path=?", (t,)).fetchone()
         if exact:
             return exact[0]

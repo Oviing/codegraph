@@ -56,6 +56,11 @@ linked neighbours. The legend isolates a community with one click.
 
 **Layouts:** force, grouped by community, layered (callers on top), radial around the selection, memory zones
 (concentric bands: working in the centre, long-term around it, dormant outside; switches on the memory lens).
+**3D mode:** the *3D* button turns the map into a futuristic space view: the same graph laid out in three dimensions
+with glowing nodes, depth fog, data pulses along calls and a starfield. Drag to orbit, wheel to zoom, click to select,
+double-click to open; it auto-rotates until you touch it and *Fit* resumes the spin. With the memory lens, working
+memories pulse, long-term ones get a ring, dormant ones fade, and the *memory zones* layout becomes three nested
+glowing shells. Drawn with plain canvas (no libraries, works offline). SVG export stays a flat 2D snapshot.
 **Filters:** minimum link weight, certain-only links, hops from the selection, tests, kind, folder.
 **Tools:** *Show impact* (transitive callers), *Path* between two symbols (shortest call chain), *Surprises*
 (certain links between different communities and folders), *Save / Compare snapshot* (which symbols changed

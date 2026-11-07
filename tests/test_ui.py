@@ -102,3 +102,28 @@ def test_rejects_foreign_host_origin_and_bad_input(base):
     with pytest.raises(urllib.error.HTTPError) as e:
         get(base, "/api/symbol?id=abc")
     assert e.value.code == 400
+
+
+def test_memory_lens_symbol_panel_and_memories_endpoint(tmp_path):
+    from codegraph import memory
+    from codegraph.indexer import index_repo
+    from codegraph.queries import Graph
+    from tests.conftest import make_repo
+
+    make_repo(tmp_path, {"app.py": "def helper():\n    return 1\n\n\ndef run():\n    return helper()\n"})
+    index_repo(tmp_path)
+    g = Graph(tmp_path)
+    mid = g.remember("helper stays pure", about="helper").split()[1]
+    old = g.remember("old hunch", about="run", kind="intent").split()[1]
+    g.db.execute("UPDATE memories SET created='2020-01-01T00:00:00Z'")  # long unused -> faded on refresh
+    g.db.commit()
+    api = ui.Api(g)
+    mem = api.memories()
+    assert {m["id"]: m["tier"] for m in mem["memories"]} == {mid: "dormant", old: "dormant"}
+    assert mem["tiers"]["dormant"] == 2 and mem["order"] == list(memory.TIERS)
+    lens = api.lens("memory")
+    assert lens["cat"] and lens["tiers"]["dormant"] == 2 and set(lens["sym"].values()) == {1}
+    sid = next(i for i, s in api.S.items() if s["name"] == "helper")
+    d = api.symbol(sid)
+    assert [m["title"] for m in d["memories"]] == ["helper stays pure"] and d["memories"][0]["tier"] == "dormant"
+    g.close()

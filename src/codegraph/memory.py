@@ -10,6 +10,7 @@ current symbol after every index: same source -> `ok`, changed source -> `stale`
 """
 from __future__ import annotations
 
+import calendar
 import hashlib
 import re
 import subprocess
@@ -25,6 +26,16 @@ STATE_ORDER = {"ok": 0, "stale": 1, "orphaned": 2}
 FIELDS = ("id", "kind", "title", "status", "supersedes", "superseded_by", "author", "commit", "created",
           "anchors")
 CHARS_PER_TOKEN = 4
+
+# Tiers, like a brain: a new memory is *working*; recalled often enough it consolidates into *long_term*;
+# left unused it fades to *dormant* (out of sight in context/impact/review, still found by recall, and
+# revived by a hit). Invariants never fade. Usage is stored locally in graph.db (memory_access), not in
+# the committed files, so recalling never rewrites them.
+TIERS = ("working", "long_term", "dormant")
+PROMOTE_RECALLS = 3        # recalls needed to consolidate into long term
+WORKING_GRACE_DAYS = 14    # a working memory nobody recalls fades after this many idle days
+LONG_IDLE_DAYS = 90        # a long-term memory fades after this many idle days
+DAY = 86400
 GITIGNORE = "graph.db*\nGRAPH_REPORT.md\ngraph.html\n"
 
 # memory text is committed and shown to other agents, so obvious credentials are refused
@@ -196,6 +207,7 @@ def _delete(db, mid: str):
     for t in ("memories", "memory_anchors", "memory_links"):
         db.execute(f"DELETE FROM {t} WHERE {'id' if t == 'memories' else 'mem_id'}=?", (mid,))
     db.execute("DELETE FROM memory_fts WHERE mem_id=?", (mid,))
+    # memory_access is kept: an edited or re-indexed memory keeps its usage; sync prunes vanished ids
 
 
 def sync(db, root: str | Path) -> dict:
@@ -227,7 +239,65 @@ def sync(db, root: str | Path) -> dict:
         db.execute("INSERT INTO memory_fts(mem_id,title,body,kind) VALUES(?,?,?,?)",
                    (mid, meta.get("title", ""), "\n".join((text, why, alt)), meta.get("kind", "")))
         changed += 1
+    db.execute("DELETE FROM memory_access WHERE mem_id NOT IN (SELECT id FROM memories)")
+    db.execute("INSERT OR IGNORE INTO memory_access(mem_id, tier, tier_since) "
+               "SELECT id, 'working', created FROM memories")
     return {"memories": len(files), "changed": changed}
+
+
+# ---- tiers ----
+
+def _epoch(iso: str, default: float = 0.0) -> float:
+    try:
+        return float(calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")))
+    except (TypeError, ValueError):
+        return default
+
+
+def _iso(epoch: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def tier_for(kind: str, created: str, recalls: int, last_recalled: str, now: float) -> str:
+    """Where a memory belongs, from how often and how recently it was recalled."""
+    idle = (now - max(_epoch(created, now), _epoch(last_recalled))) / DAY
+    pinned = kind == "invariant"
+    if recalls >= PROMOTE_RECALLS:
+        return "dormant" if idle > LONG_IDLE_DAYS and not pinned else "long_term"
+    return "dormant" if idle > WORKING_GRACE_DAYS and not pinned else "working"
+
+
+def reclassify(db, now: float | None = None, ids=None) -> int:
+    """Move memories between tiers. Lazy (run on every update/recall), `now` is injectable for tests."""
+    now = time.time() if now is None else now
+    moved = 0
+    q = "SELECT m.id, m.kind, m.created, a.recalls, a.last_recalled, a.tier " \
+        "FROM memories m JOIN memory_access a ON a.mem_id=m.id"
+    for r in db.execute(q).fetchall():
+        if ids is not None and r["id"] not in ids:
+            continue
+        t = tier_for(r["kind"], r["created"], r["recalls"] or 0, r["last_recalled"], now)
+        if t != r["tier"]:
+            db.execute("UPDATE memory_access SET tier=?, tier_since=? WHERE mem_id=?", (t, _iso(now), r["id"]))
+            moved += 1
+    return moved
+
+
+def touch(db, ids, now: float | None = None):
+    """Record that these memories were recalled (explicitly), then re-judge their tier."""
+    now = time.time() if now is None else now
+    ids = list(ids)
+    db.executemany("UPDATE memory_access SET recalls=recalls+1, last_recalled=? WHERE mem_id=?",
+                   [(_iso(now), i) for i in ids])
+    reclassify(db, now, set(ids))
+
+
+def tier_counts(db) -> dict[str, int]:
+    out = dict.fromkeys(TIERS, 0)
+    for t, n in db.execute("SELECT a.tier, COUNT(*) FROM memories m JOIN memory_access a ON a.mem_id=m.id "
+                           "WHERE m.status='active' GROUP BY a.tier"):
+        out[t] = n
+    return out
 
 
 def relink(db, root: str | Path):
@@ -260,6 +330,7 @@ def relink(db, root: str | Path):
 def update(db, root: str | Path) -> dict:
     stats = sync(db, root)
     relink(db, root)
+    reclassify(db)
     return stats
 
 
@@ -271,16 +342,22 @@ def _worse(a: str, b: str) -> str:
 
 def _sorted(mems):
     mems = sorted(mems, key=lambda m: m["created"] or "", reverse=True)
-    return sorted(mems, key=lambda m: KIND_ORDER.get(m["kind"], 9))
+    mems = sorted(mems, key=lambda m: KIND_ORDER.get(m["kind"], 9))
+    return sorted(mems, key=lambda m: m.get("tier") == "dormant")  # faded memories last
 
 
-def related(db, sym_ids, files) -> list[dict]:
+def related(db, sym_ids, files, dormant: bool = False) -> list[dict]:
     """Active memories anchored to any of these symbols, or to one of these files. Each carries the
-    worst `state` among its matching anchors. Invariants and failed attempts come first."""
+    worst `state` among its matching anchors. Invariants and failed attempts come first. Dormant
+    (faded) memories are left out unless `dormant`."""
     sym_ids, files = set(sym_ids), set(files)
     out: dict[str, dict] = {}
-    for r in db.execute("SELECT m.*, l.sym_id AS sid, l.file AS lfile, l.state AS state "
-                        "FROM memories m JOIN memory_links l ON l.mem_id=m.id WHERE m.status='active'"):
+    for r in db.execute("SELECT m.*, l.sym_id AS sid, l.file AS lfile, l.state AS state, "
+                        "a.tier AS tier, a.recalls AS recalls, a.last_recalled AS last_recalled "
+                        "FROM memories m JOIN memory_links l ON l.mem_id=m.id "
+                        "LEFT JOIN memory_access a ON a.mem_id=m.id "
+                        "WHERE m.status='active' AND (?=1 OR COALESCE(a.tier,'working')!='dormant')",
+                        (1 if dormant else 0,)):
         hit = r["sid"] in sym_ids if r["sid"] is not None else (r["state"] == "ok" and r["lfile"] in files)
         if not hit:
             continue
@@ -300,6 +377,8 @@ def load(db, ids) -> list[dict]:
         if r is None:
             continue
         m = dict(r)
+        a = db.execute("SELECT tier, recalls, last_recalled FROM memory_access WHERE mem_id=?", (mid,)).fetchone()
+        m.update(dict(a) if a else {"tier": "working", "recalls": 0, "last_recalled": ""})
         m["anchors"] = [f"{f}::{q}" if q else f for f, q in
                         db.execute("SELECT file, qualname FROM memory_anchors WHERE mem_id=?", (mid,))]
         state = "ok"
@@ -316,14 +395,18 @@ def search(db, query: str, kind: str = "", limit: int = 10) -> list[str]:
         return []
     fts = " OR ".join(f'"{w}"*' for w in words)
     rows = db.execute("SELECT f.mem_id FROM memory_fts f JOIN memories m ON m.id=f.mem_id "
+                      "LEFT JOIN memory_access a ON a.mem_id=m.id "
                       "WHERE memory_fts MATCH ? AND m.status='active' AND (?='' OR m.kind=?) "
-                      "ORDER BY rank LIMIT ?", (fts, kind, kind, limit)).fetchall()
+                      "ORDER BY COALESCE(a.tier,'working')='dormant', rank LIMIT ?",
+                      (fts, kind, kind, limit)).fetchall()
     return [r[0] for r in rows]
 
 
 def recent(db, kind: str = "", limit: int = 10) -> list[str]:
-    rows = db.execute("SELECT id FROM memories WHERE status='active' AND (?='' OR kind=?) "
-                      "ORDER BY created DESC, id DESC LIMIT ?", (kind, kind, limit)).fetchall()
+    rows = db.execute("SELECT m.id FROM memories m LEFT JOIN memory_access a ON a.mem_id=m.id "
+                      "WHERE m.status='active' AND (?='' OR m.kind=?) "
+                      "ORDER BY COALESCE(a.tier,'working')='dormant', m.created DESC, m.id DESC LIMIT ?",
+                      (kind, kind, limit)).fetchall()
     return [r[0] for r in rows]
 
 
@@ -338,6 +421,12 @@ def counts(db) -> tuple[int, int]:
 # ---- rendering ----
 
 def tag(m: dict) -> str:
+    if m.get("tier") == "dormant":
+        return "  [dormant: unused for a while]" + _state_tag(m)
+    return _state_tag(m)
+
+
+def _state_tag(m: dict) -> str:
     if m["state"] == "stale":
         return f"  [stale: code changed since {m.get('commit_sha') or 'it was written'}]"
     if m["state"] == "orphaned":
@@ -368,7 +457,9 @@ def card(m: dict, body_chars: int = 800) -> str:
     out = [f"[{m['kind']}] {m['title']}  ({m['id']}){tag(m)}"]
     if m.get("anchors"):
         out.append("  anchors: " + ", ".join(m["anchors"]))
-    meta = " ".join(x for x in (f"by {m['author']}" if m.get("author") else "",
+    meta = " ".join(x for x in (f"{m['tier'].replace('_', '-')}, recalled {m.get('recalls') or 0}x"
+                                if m.get("tier") else "",
+                                f"by {m['author']}" if m.get("author") else "",
                                 f"@ {m['commit_sha']}" if m.get("commit_sha") else "",
                                 (m.get("created") or "")[:10]) if x)
     if meta:
@@ -386,4 +477,7 @@ def summary(db) -> str:
     total, bad = counts(db)
     if not total:
         return ""
-    return f"{total} agent memories" + (f" ({bad} stale or orphaned)" if bad else "") + " - use recall()"
+    t = tier_counts(db)
+    by_tier = ", ".join(f"{t[k]} {k.replace('_', '-')}" for k in TIERS if t[k])
+    return (f"{total} agent memories" + (f" ({by_tier})" if by_tier else "")
+            + (f" ({bad} stale or orphaned)" if bad else "") + " - use recall()")

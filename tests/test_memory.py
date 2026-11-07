@@ -262,3 +262,83 @@ def test_stop_nudge_blocks_once_and_only_when_code_changed_without_a_memory(repo
     g.remember("explained", about="helper")
     g.close()
     assert stop_nudge(repo, "{}") == ""                          # a memory was written
+
+
+# ---- tiers: working -> long term -> dormant ----
+
+DAY = memory.DAY
+
+
+def tier(g, mid):
+    return g.db.execute("SELECT tier FROM memory_access WHERE mem_id=?", (mid,)).fetchone()[0]
+
+
+def test_new_memory_is_working_and_recalls_consolidate_it(repo):
+    g = graph(repo)
+    mid = mem_id(g.remember("helper must stay pure", about="helper"))
+    assert tier(g, mid) == "working"
+    for _ in range(memory.PROMOTE_RECALLS - 1):
+        g.recall(about="helper")
+    assert tier(g, mid) == "working"
+    out = g.recall(about="helper")
+    assert tier(g, mid) == "long_term" and "long-term, recalled 3x" in out
+    assert "1 long-term" in g.stats()
+    g.close()
+
+
+def test_recalling_does_not_rewrite_the_committed_file(repo):
+    g = graph(repo)
+    mid = mem_id(g.remember("keep me", about="helper"))
+    f = repo / ".codegraph" / "memory" / f"{mid}.md"
+    before = f.read_bytes()
+    for _ in range(4):
+        g.recall(query="keep")
+    assert f.read_bytes() == before
+    g.close()
+
+
+def test_unused_memories_fade_and_a_recall_revives_them(repo):
+    g = graph(repo)
+    mid = mem_id(g.remember("old hunch about helper", about="helper", kind="intent"))
+    later = __import__("time").time() + (memory.WORKING_GRACE_DAYS + 1) * DAY
+    memory.reclassify(g.db, later)
+    assert tier(g, mid) == "dormant"
+    # hidden from context, but recall still finds it, tagged
+    assert "old hunch" not in g.context("helper")
+    out = g.recall(about="helper")
+    assert "old hunch" in out
+    assert tier(g, mid) == "working"  # revived by the hit
+    g.close()
+
+
+def test_long_term_fades_after_a_long_idle_time_but_invariants_never_do(repo):
+    g = graph(repo)
+    a = mem_id(g.remember("decision A", about="helper"))
+    b = mem_id(g.remember("invariant B", about="helper", kind="invariant"))
+    for _ in range(memory.PROMOTE_RECALLS):
+        g.recall(about="helper")
+    assert tier(g, a) == tier(g, b) == "long_term"
+    memory.reclassify(g.db, __import__("time").time() + (memory.LONG_IDLE_DAYS + 1) * DAY)
+    assert tier(g, a) == "dormant" and tier(g, b) == "long_term"
+    g.close()
+
+
+def test_tier_filter_and_counts(repo):
+    g = graph(repo)
+    mem_id(g.remember("one", about="helper"))
+    assert "one" in g.recall(tier="working")
+    assert "No long-term" in g.recall(tier="long-term")
+    assert g.recall(tier="bogus").startswith("Unknown tier")
+    g.close()
+
+
+def test_usage_survives_a_forced_reindex(repo):
+    g = graph(repo)
+    mid = mem_id(g.remember("sticky", about="helper"))
+    for _ in range(memory.PROMOTE_RECALLS):
+        g.recall(about="helper")
+    g.close()
+    index_repo(repo, force=True)
+    g = graph(repo)
+    assert tier(g, mid) == "long_term"
+    g.close()

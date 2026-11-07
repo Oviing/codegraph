@@ -51,7 +51,7 @@ canvas.drag{cursor:grabbing}
   <input id="q" placeholder="Search a symbol  ( / )" autocomplete="off">
   <label>view <select id="view"><option value="c">communities → files → symbols</option><option value="f">files → symbols</option></select></label>
   <label>lens <select id="lens"></select></label>
-  <label>layout <select id="layout"><option value="force">force</option><option value="grouped">grouped by community</option><option value="layered">layered (callers on top)</option><option value="radial">radial around selection</option></select></label>
+  <label>layout <select id="layout"><option value="force">force</option><option value="grouped">grouped by community</option><option value="layered">layered (callers on top)</option><option value="radial">radial around selection</option><option value="zones">memory zones (by tier)</option></select></label>
   <button id="fit" title="Zoom to fit everything">Fit</button>
   <button id="unpin" title="Release all dragged nodes">Unpin all</button>
   <button id="reset" title="Back to the overview">Reset</button>
@@ -84,7 +84,7 @@ const $=id=>document.getElementById(id), cv=$('c'), cx=cv.getContext('2d'), side
 const el=(t,props={},...kids)=>{const e=document.createElement(t);Object.assign(e,props);kids.forEach(k=>e.append(k));return e};
 const S={res:1,view:'c',lens:'',layout:'force',color:'c',minW:1,conf:'all',tests:true,kind:'',folder:'',hops:0,iso:null,hl:null,labels:true};
 const LENS_OPTS=[['','none (community colours)'],['importance','importance'],['bottlenecks','bottlenecks'],['cycles','cycles'],['layers','layers'],
-  ['coupling','coupling / misplaced'],['kcore','core vs periphery'],['deadcode','dead code'],['hotspots','hotspots (git)']];
+  ['coupling','coupling / misplaced'],['kcore','core vs periphery'],['deadcode','dead code'],['hotspots','hotspots (git)'],['memory','memory tiers']];
 LENS_OPTS.forEach(([v,t])=>$('lens').append(el('option',{value:v,textContent:t})));
 const api=async(p,q={})=>{const r=await fetch('/api/'+p+'?'+new URLSearchParams({res:S.res,...q}));return r.json()};
 const fmt=v=>v>=100?Math.round(v)+'':v>=1?v.toFixed(1):v.toFixed(3).replace(/0+$/,'').replace(/\.$/,'');
@@ -109,6 +109,11 @@ const hash=s=>{let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))|0;ret
 const hue=c=>c<0?'#8b93a1':`hsl(${(c*137.508+20)%360},${dark.matches?58:64}%,${dark.matches?62:46}%)`;
 const dirOf=f=>f.split('/').slice(0,-1).slice(0,2).join('/')||'.';
 const ramp=t=>`hsl(${52-52*Math.min(1,Math.max(0,t))},92%,${dark.matches?58:50}%)`;
+const TIER={3:{name:'working',col:()=>dark.matches?'#fb923c':'#ea580c',R:170,hint:'fresh, in active use'},
+  2:{name:'long-term',col:()=>dark.matches?'#60a5fa':'#2563eb',R:400,hint:'consolidated by repeated recall'},
+  1:{name:'dormant',col:()=>dark.matches?'#6b7280':'#9ca3af',R:640,hint:'faded from disuse; recall revives it'}};
+const ZONE_NONE=860;
+const tierName=v=>TIER[v]?TIER[v].name:'no memory';
 const rampLayer=t=>`hsl(${215-190*Math.min(1,Math.max(0,t))},68%,${dark.matches?62:50}%)`;
 function baseColor(n){return S.color==='d'&&n.file?hue(hash(dirOf(n.file))%200):hue(n.c)}
 function nodeVal(n){
@@ -123,6 +128,7 @@ function colorOf(n){
   const v=nodeVal(n);
   if(S.lens==='layers')return rampLayer(layerMax?v/layerMax:0);
   if(v<=0)return dark.matches?'#3b4250':'#d4d8df';
+  if(lensData&&lensData.cat)return TIER[v]?TIER[v].col():baseColor(n);
   return ramp(v/(hiBy[n.t]||1))}
 
 // ---- building the graph -----------------------------------------------------------------------
@@ -249,7 +255,7 @@ function step(){
   for(const a of arr){const k=Math.floor(a.x/CELL)+','+Math.floor(a.y/CELL);(grid.get(k)||grid.set(k,[]).get(k)).push(a);
     if(a.t!=='c'&&a.c>=0){const c=cen.get(a.c)||(cen.set(a.c,{x:0,y:0,n:0,m:[]}),cen.get(a.c));c.x+=a.x;c.y+=a.y;c.n++;c.m.push(a)}
     if(a.t==='s'){const c=fil.get(a.file)||(fil.set(a.file,{x:0,y:0,n:0}),fil.get(a.file));c.x+=a.x;c.y+=a.y;c.n++}}
-  const gp=S.layout==='grouped'?.025:.004,layered=S.layout==='layered',rad=S.layout==='radial'&&radial.size>0;
+  const gp=S.layout==='grouped'?.025:.004,layered=S.layout==='layered',rad=S.layout==='radial'&&radial.size>0,zones=S.layout==='zones'&&lensData&&lensData.cat;
   for(const a of arr){const gx=Math.floor(a.x/CELL),gy=Math.floor(a.y/CELL);
     for(let ox=-1;ox<=1;ox++)for(let oy=-1;oy<=1;oy++){const list=grid.get((gx+ox)+','+(gy+oy));if(!list)continue;
       for(const b of list){if(b.i<=a.i)continue;let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy+.01;
@@ -267,6 +273,7 @@ function step(){
     a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy}
   for(const a of arr){
     if(layered&&layerOf.has(a.key))a.vy+=(layerOf.get(a.key)*95-layerMax*47-a.y)*.22;
+    if(zones){const v=nodeVal(a),T=v>0?TIER[v].R:ZONE_NONE,d=Math.hypot(a.x,a.y)||1,f=(T-d)*.07;a.vx+=a.x/d*f;a.vy+=a.y/d*f}
     if(rad&&radial.has(a.key)){const t=radial.get(a.key),c=nodes.get(sel);a.vx+=(t[0]+c.x-a.x)*.05;a.vy+=(t[1]+c.y-a.y)*.05}
     if(a.pin){a.vx=a.vy=0;continue}
     a.vx*=.8;a.vy*=.8;a.x+=a.vx*alpha;a.y+=a.vy*alpha}
@@ -299,6 +306,11 @@ function labelFor(n,focus,k){
 function draw(){
   cx.setTransform(dpr,0,0,dpr,0,0);cx.clearRect(0,0,W,H);
   const focus=sel&&nodes.has(sel)&&!nodes.get(sel).h?nbrSet(sel):null,k=cam.k,big=VN.length>1500;
+  if(S.layout==='zones'&&lensData&&lensData.cat){const [ox,oy]=toS(0,0);
+    for(const v of [3,2,1]){const z=TIER[v];cx.globalAlpha=.55;cx.strokeStyle=z.col();cx.lineWidth=1.5;cx.setLineDash([6,6]);
+      cx.beginPath();cx.arc(ox,oy,z.R*k,0,6.3);cx.stroke();cx.setLineDash([]);
+      cx.globalAlpha=.9;cx.fillStyle=z.col();cx.font='12px system-ui';cx.textAlign='center';cx.fillText(`${z.name} (${lensData.tiers[v===3?'working':v===2?'long_term':'dormant']||0})`,ox,oy-z.R*k-6)}
+    cx.globalAlpha=.7;cx.fillStyle=css.mute;cx.font='12px system-ui';cx.textAlign='center';cx.fillText('no memory',ox,oy-ZONE_NONE*k-6)}
   for(const h of hulls()){const [sx,sy]=toS(h.x,h.y);cx.globalAlpha=S.hl===h.c?.2:.07;cx.fillStyle=hue(h.c);cx.beginPath();cx.arc(sx,sy,h.r*k,0,6.3);cx.fill();
     if(k>.3&&!big){cx.globalAlpha=.8;cx.fillStyle=css.mute;cx.font='11px system-ui';cx.textAlign='center';cx.fillText(commLabel(h.c),sx,sy-(h.r+5)*k)}}
   for(const l of VL){
@@ -313,7 +325,7 @@ function draw(){
   for(const n of VN){
     const [sx,sy]=toS(n.x,n.y),r=n.r*k,dim=(focus&&!focus.has(n.key))||(S.hl!==null&&n.c!==S.hl);
     if(sx<-60||sy<-60||sx>W+60||sy>H+60)continue;
-    cx.globalAlpha=dim?.12:1;cx.fillStyle=colorOf(n);cx.beginPath();
+    cx.globalAlpha=dim?.12:(lensData&&lensData.cat&&nodeVal(n)===1?.55:1);cx.fillStyle=colorOf(n);cx.beginPath();
     if(n.t==='p'||n.t==='f'){const s=Math.max(r*1.6,4);cx.roundRect(sx-s/2,sy-s/2,s,s,s*.22)}else cx.arc(sx,sy,Math.max(r,1.5),0,6.3);
     cx.fill();
     if(n.t==='c'){cx.strokeStyle=hue(n.c);cx.lineWidth=2;cx.globalAlpha=dim?.12:.9;cx.stroke()}
@@ -343,7 +355,7 @@ cv.addEventListener('dblclick',async e=>{const n=pick(e);if(!n)return;n.pin=fals
 cv.addEventListener('wheel',e=>{e.preventDefault();auto=false;const r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
   const [wx,wy]=toW(mx,my);cam.k=Math.min(8,Math.max(.04,cam.k*Math.exp(-e.deltaY*.0015)));cam.x=wx-(mx-W/2)/cam.k;cam.y=wy-(my-H/2)/cam.k;dirty=true},{passive:false});
 function tipText(n){
-  const v=S.lens&&S.lens!=='layers'&&lensData?`  ·  ${lensData.title}: ${fmt(nodeVal(n))}`:S.lens==='layers'?`  ·  layer ${nodeVal(n)}`:'';
+  const v=S.lens&&S.lens!=='layers'&&lensData?`  ·  ${lensData.title}: ${lensData.cat?tierName(nodeVal(n)):fmt(nodeVal(n))}`:S.lens==='layers'?`  ·  layer ${nodeVal(n)}`:'';
   if(n.t==='c')return `${n.label}  ·  ${n.n} symbols in ${n.files} files${v}`;
   if(n.t==='p')return `${n.file}  [${commLabel(n.c)}]  ·  ${n.n} symbols${v}`;
   if(n.t==='f')return `${n.file}  ·  ${n.n} symbols, ${n.loc} loc${v}`;
@@ -356,7 +368,8 @@ $('fit').onclick=()=>{auto=true;fit()};
 $('unpin').onclick=()=>{nodes.forEach(n=>n.pin=false);reheat(.6)};
 $('reset').onclick=()=>{S.iso=null;S.hl=null;load()};
 $('view').onchange=e=>{S.view=e.target.value;load()};
-$('layout').onchange=e=>{S.layout=e.target.value;nodes.forEach(n=>n.pin=false);refilter();reheat(1);auto=true;ticks=0};
+$('layout').onchange=async e=>{S.layout=e.target.value;
+  if(S.layout==='zones'&&S.lens!=='memory'){S.lens='memory';$('lens').value='memory';await loadLens();legend();panel()}nodes.forEach(n=>n.pin=false);refilter();reheat(1);auto=true;ticks=0};
 $('color').onchange=e=>{S.color=e.target.value;legend();dirty=true};
 $('lbl').onclick=e=>{S.labels=!S.labels;e.target.classList.toggle('on',S.labels);dirty=true};
 $('lens').onchange=async e=>{S.lens=e.target.value;await loadLens();refilter();legend();panel()};
@@ -407,6 +420,12 @@ async function loadLens(){
   dirty=true}
 function lensBar(){
   const b=$('lensbar');if(!S.lens){b.style.display='none';return}
+  if(lensData&&lensData.cat){
+    b.replaceChildren(el('b',{textContent:'Memory tiers'}),...[3,2,1].map(v=>{const key=v===3?'working':v===2?'long_term':'dormant';
+      return el('div',{className:'l',title:TIER[v].hint,style:'justify-content:flex-start;gap:6px;align-items:center;margin-top:3px'},
+        el('i',{className:'sw',style:`width:10px;height:10px;border-radius:50%;background:${TIER[v].col()}`}),
+        el('span',{textContent:`${TIER[v].name} · ${lensData.tiers[key]||0}`,style:'white-space:nowrap'}),el('small',{textContent:TIER[v].hint.split(';')[0].split(' by ')[0],style:'margin-left:auto;white-space:nowrap'}))}));
+    b.style.display='block';return}
   const f=S.lens==='layers'?rampLayer:ramp,g='linear-gradient(90deg,'+[0,.25,.5,.75,1].map(t=>f(t)).join(',')+')';
   b.replaceChildren(el('b',{textContent:LENS_OPTS.find(o=>o[0]===S.lens)[1]}),el('div',{className:'g',style:'background:'+g}),
     el('div',{className:'l'},el('span',{textContent:S.lens==='layers'?'callers (top)':'low'}),el('span',{textContent:S.lens==='layers'?'callees (bottom)':'high'})));
@@ -450,7 +469,7 @@ async function panel(){
   const near=[];for(const l of VL){if(l.a===n)near.push([l.b,'→',l.w]);else if(l.b===n)near.push([l.a,'←',l.w])}
   const nearList=()=>{if(!near.length)return;side.append(el('h4',{textContent:'Connected'}));
     near.sort((a,b)=>b[2]-a[2]).slice(0,25).forEach(([o,d,w])=>side.append(nb(`${d} ${o.t==='c'?o.label:o.t==='s'?symInfo.get(o.id).qn:o.file}  ×${w}`,()=>select(o.key))))};
-  const lensLine=()=>{if(S.lens&&S.lens!=='layers'&&lensData)side.append(el('div',{className:'mute',textContent:`${lensData.title}: ${fmt(nodeVal(n))}`}))};
+  const lensLine=()=>{if(S.lens&&S.lens!=='layers'&&lensData)side.append(el('div',{className:'mute',textContent:`${lensData.title}: ${lensData.cat?tierName(nodeVal(n)):fmt(nodeVal(n))}`}))};
   if(n.t==='c'){
     side.append(el('h3',{textContent:n.label}),el('div',{className:'mute',textContent:n.c<0?'symbols with no calls or links':'community '+n.c}));
     lensLine();
@@ -475,6 +494,14 @@ async function panel(){
     el('div',{className:'mute',textContent:'community: '+(d.clabel||'none')}));lensLine();
   if(d.sig)side.append(el('div',{style:'margin-top:6px;font-family:ui-monospace,Menlo,monospace;word-break:break-all',textContent:d.sig}));
   if(d.doc)side.append(el('p',{className:'mute',textContent:d.doc.slice(0,400)}));
+  const mems=d.memories||[];
+  if(mems.length){side.append(el('h4',{textContent:`Memories (${mems.length})`}));
+    mems.forEach(m=>{const t=TIER[{working:3,long_term:2,dormant:1}[m.tier]];
+      side.append(el('div',{style:'margin:4px 0 8px'},
+        el('div',{},el('span',{textContent:t.name,style:`background:${t.col()};color:#fff;border-radius:9px;padding:0 7px;font-size:11px;margin-right:6px`}),
+          el('b',{textContent:m.title})),
+        el('small',{className:'mute',textContent:`${m.kind} · recalled ${m.recalls}x${m.last_recalled?' · last '+m.last_recalled.slice(0,10):''}${m.state!=='ok'?' · '+m.state:''}`}),
+        ...(m.why?[el('div',{className:'mute',textContent:m.why})]:[])))})}
   const impactOn=[...marks.values()].includes('impact');
   side.append(el('div',{className:'btns'},
     btn('Expand neighbours',async()=>{await expandSymbol(n.id);panel()},'pull in callers and callees'),

@@ -24,6 +24,8 @@ INSTRUCTIONS = (
     "Check the '## memories' block (or recall) before changing code: it holds earlier decisions, failed "
     "attempts and invariants, and '[stale]' means the code changed since. After a non-obvious decision, a "
     "failed attempt or a discovered constraint, call remember(about=<symbols>, why=..., alternatives=...). "
+    "Memories behave like a brain: recalled ones consolidate into long term, unused ones fade to dormant "
+    "(hidden from context, still found by recall). "
     "Fall back to reading files only for exact surrounding code."
 )
 

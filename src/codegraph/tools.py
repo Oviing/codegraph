@@ -78,11 +78,13 @@ TOOLS: tuple[Tool, ...] = (
           _p("alternatives", "str", "", "what was considered and rejected, and why"),
           _p("title", "str", "", "short title (default: first line of text)"))),
     Tool("recall", "Memories (decisions, failed attempts, invariants) about a symbol/file and its neighbours, "
-                   "or matching words. Check before changing code. Stale = the code changed since.",
+                   "or matching words. Check before changing code. Stale = the code changed since. "
+                   "Recalled memories get stronger; unused ones fade to dormant.",
          (_p("query", "str", "", "words to search for"),
           _p("about", "str", "", "symbols or files, comma separated"),
           _p("kind", "str", "", "only this kind"),
-          _p("limit", "int", 10))),
+          _p("limit", "int", 10),
+          _p("tier", "str", "", "only this tier: working | long_term | dormant"))),
     Tool("forget", "Retire a memory that no longer holds, or mark it superseded by a newer one. "
                    "The file is kept as history.",
          (_p("id", "str", None, "memory id (unique prefix is enough)"),

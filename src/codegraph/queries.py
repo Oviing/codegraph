@@ -725,11 +725,16 @@ class Graph:
         return f"remembered {mid} [{kind}] {title}\nanchored to: {where}"
 
     @synchronized
-    def recall(self, query: str = "", about: str = "", kind: str = "", limit: int = 10) -> str:
-        """Memories anchored to `about` (and to its direct callers/callees), matching `query`, or the latest."""
+    def recall(self, query: str = "", about: str = "", kind: str = "", limit: int = 10,
+               tier: str = "") -> str:
+        """Memories anchored to `about` (and to its direct callers/callees), matching `query`, or the latest.
+        Recalling a memory strengthens it: often-used ones consolidate into long term, unused ones fade."""
         self.status = "ok"
         self._memory_refresh()
         kind = kind.strip().lower()
+        tier = tier.strip().lower().replace("-", "_")
+        if tier and tier not in memory.TIERS:
+            return f"Unknown tier '{tier}'. Use one of: {', '.join(memory.TIERS)}."
         limit = max(1, min(limit, 50))
         ids: list[str] = []
 
@@ -749,8 +754,8 @@ class Graph:
                     return f"No symbol or file matches '{term}'. Try search()."
                 files.add(f)
             near = {v for s_ in sym_ids for v in self._out.get(s_, []) + self._in.get(s_, [])} - sym_ids
-            add(memory.related(self.db, sym_ids, files))
-            add(memory.related(self.db, near, set()))
+            add(memory.related(self.db, sym_ids, files, dormant=True))
+            add(memory.related(self.db, near, set(), dormant=True))
         if query.strip():
             ids.extend(i for i in memory.search(self.db, query, kind, limit) if i not in ids)
         if not about.strip() and not query.strip():
@@ -758,7 +763,14 @@ class Graph:
         if not ids:
             return "No matching memories." if self.db.execute("SELECT 1 FROM memories").fetchone() \
                 else "No memories yet. Record one with remember()."
-        mems = memory.load(self.db, ids[:limit])
+        if tier:
+            ids = [m["id"] for m in memory.load(self.db, ids) if m["tier"] == tier]
+            if not ids:
+                return f"No {tier.replace('_', '-')} memories match."
+        shown = ids[:limit]
+        memory.touch(self.db, shown)
+        self.db.commit()
+        mems = memory.load(self.db, shown)
         return "\n".join(memory.card(m) for m in mems) + (f"\n... {len(ids) - limit} more" if len(ids) > limit else "")
 
     @synchronized

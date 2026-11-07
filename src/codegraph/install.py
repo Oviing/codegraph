@@ -35,6 +35,8 @@ of reading whole files or grepping:
    constraint you discovered, `remember` it with `about=` the symbols/files, plus `why` and `alternatives`.
    Memories marked `[stale]` were written for older code: re-check them, then `forget` or re-`remember`.
    They live in `.codegraph/memory/*.md`; commit that folder to share them.
+   Memories you recall often consolidate into long term; unused ones fade to `dormant` (hidden from
+   `context`, still found by `recall`).
 
 Edges tagged `[inferred]` or `[ambiguous]` (or `?` in `impact`) are name-based guesses, so treat them as
 upper bounds and confirm by reading the code. Read files directly only for exact surrounding code.

@@ -17,6 +17,7 @@ from importlib import resources
 from urllib.parse import parse_qs, urlparse
 
 from . import graphalgo as ga
+from . import memory
 from .community import CONF_WEIGHT
 from .indexer import index_repo
 from .queries import Graph
@@ -40,6 +41,9 @@ LENSES = {
     "kcore": ("Core / periphery", "k-core number: the dense kernel everything is wired into versus leaf code."),
     "deadcode": ("Dead code", "Functions, methods and classes nothing calls and no unresolved reference "
                  "names. Candidates only: dynamic use and entry points are invisible to static analysis."),
+    "memory": ("Memory tiers", "Agent memories by section, like a brain: working (fresh), long-term "
+               "(consolidated by repeated recall) and dormant (faded from disuse). Colour = the strongest "
+               "tier of the memories anchored to a symbol."),
     "hotspots": ("Hotspots", "Files that change together with many others (git co-change) weighted by "
                  "importance: central code that is also volatile."),
 }
@@ -201,6 +205,11 @@ class Api:
             r = self.g.db.execute("SELECT * FROM symbols WHERE id=?", (sid,)).fetchone()
             out = self._s(sid, res)
             out.update(sig=r["sig"] or "", doc=r["doc"] or "", source=self.g._read(r)[:12000])
+        with self.g._lock:
+            mems = memory.related(self.g.db, {sid}, {r["file"]}, dormant=True)
+        out["memories"] = [{"id": m["id"], "kind": m["kind"], "title": m["title"], "tier": m["tier"] or "working",
+                            "recalls": m["recalls"] or 0, "last_recalled": m["last_recalled"] or "",
+                            "state": m["state"], "why": (m["why"] or "")[:300]} for m in mems]
         out.update(self._edges_of([sid], res))
         cm = self.comms(res).get(out["c"])
         out["clabel"] = cm["label"] if cm else ""
@@ -258,6 +267,8 @@ class Api:
         res = self._res(res)
         if name not in LENSES:
             return {"error": "unknown lens"}
+        if name == "memory":  # memories change while the page is open: never cached
+            return self._memory_lens(res)
         key = (name, res if name == "coupling" else 0)
         if key not in self._lens:
             self._lens[key] = self._compute_lens(name, res)
@@ -273,6 +284,51 @@ class Api:
         return {"name": name, "title": LENSES[name][0], "desc": LENSES[name][1], "agg": agg, "hi": hi, "note": note,
                 "sym": {i: round(v, 5) for i, v in sym.items() if v > 0}, "piece": {k: round(v, 5) for k, v in piece.items()},
                 "items": items or []}
+
+    def memories(self) -> dict:
+        """Every active memory with its tier and usage, plus the number of memories per tier."""
+        with self.g._lock:
+            self.g._memory_refresh()
+            db = self.g.db
+            rows = db.execute("SELECT m.id, m.kind, m.title, a.tier, a.recalls, a.last_recalled, a.tier_since "
+                              "FROM memories m JOIN memory_access a ON a.mem_id=m.id "
+                              "WHERE m.status='active' ORDER BY m.created DESC").fetchall()
+            links: dict[str, dict] = {}
+            for mid, f, sid, state in db.execute("SELECT mem_id, file, sym_id, state FROM memory_links"):
+                lk = links.setdefault(mid, {"sids": [], "files": [], "state": "ok"})
+                if sid is not None:
+                    lk["sids"].append(sid)
+                else:
+                    lk["files"].append(f)
+                lk["state"] = memory._worse(lk["state"], state)
+            counts = memory.tier_counts(db)
+        out = []
+        for r in rows:
+            lk = links.get(r["id"], {"sids": [], "files": [], "state": "ok"})
+            out.append({"id": r["id"], "kind": r["kind"], "title": r["title"], "tier": r["tier"],
+                        "recalls": r["recalls"] or 0, "last_recalled": r["last_recalled"],
+                        "since": r["tier_since"], **lk})
+        return {"memories": out, "tiers": counts, "order": list(memory.TIERS)}
+
+    def _memory_lens(self, res) -> dict:
+        data = self.memories()
+        value = {"dormant": 1, "long_term": 2, "working": 3}
+        sym: dict[int, int] = {}
+        by_file: dict[str, list[int]] = defaultdict(list)
+        for i, s in self.S.items():
+            by_file[s["file"]].append(i)
+        items = []
+        for m in sorted(data["memories"], key=lambda m: (-value[m["tier"]], -m["recalls"])):
+            v = value[m["tier"]]
+            ids = [i for i in m["sids"] if i in self.S] + [i for f in m["files"] for i in by_file.get(f, [])]
+            for i in ids:
+                sym[i] = max(sym.get(i, 0), v)
+            first = ids[0] if ids else None
+            sub = f"{m['tier'].replace('_', '-')}, recalled {m['recalls']}x"
+            items.append({"t": m["title"], "s": sub, **({"id": first} if first is not None else {})})
+        out = self._pack("memory", sym, res, "max", items[:40])
+        out.update(cat=True, tiers=data["tiers"], order=data["order"], hi=3)
+        return out
 
     def _item(self, sid, sub="") -> dict:
         s = self.S[sid]
@@ -492,6 +548,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/search": lambda: api.search(a.get("q", ""), res),
             "/api/community": lambda: api.community(int(a["id"]), res),
             "/api/lens": lambda: api.lens(a["name"], res),
+            "/api/memories": lambda: api.memories(),
             "/api/path": lambda: api.path(int(a["a"]), int(a["b"]), res),
             "/api/surprises": lambda: api.surprises(res),
             "/api/diff": lambda: api.diff(res),

@@ -10,7 +10,7 @@ from pathlib import Path
 from .parser import Parsed
 from .rank import pagerank
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, lang TEXT, hash TEXT, loc INT);
@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS memory_links(mem_id TEXT, file TEXT, sym_id INT, stat
 CREATE INDEX IF NOT EXISTS ix_ml_mem ON memory_links(mem_id);
 CREATE INDEX IF NOT EXISTS ix_ml_sym ON memory_links(sym_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(mem_id UNINDEXED, title, body, kind);
+-- how the memories are used: local to this checkout (graph.db is gitignored) and deliberately NOT cleared
+-- on a forced reindex. tier: working | long_term | dormant, moved by recall frequency and recency.
+CREATE TABLE IF NOT EXISTS memory_access(
+  mem_id TEXT PRIMARY KEY, recalls INT DEFAULT 0, last_recalled TEXT DEFAULT '',
+  tier TEXT DEFAULT 'working', tier_since TEXT DEFAULT '');
 """
 
 
@@ -94,7 +99,12 @@ def _migration_4(db: sqlite3.Connection) -> bool:
     return False
 
 
-MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4}
+def _migration_5(db: sqlite3.Connection) -> bool:
+    """Memory tiers (memory_access): created by SCHEMA, which is idempotent. Nothing to alter."""
+    return False
+
+
+MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5}
 
 TARGET_KINDS_CALL = {"function", "method", "class", "struct", "type", "interface", "trait", "enum",
                      "table", "view", "procedure"}  # SQL objects, referenced from docs and other SQL

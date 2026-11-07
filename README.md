@@ -52,8 +52,15 @@ linked neighbours. The legend isolates a community with one click.
 | core vs periphery | k-core decomposition | the dense kernel vs leaf code |
 | dead code | zero in-degree + no unresolved references | candidates nothing calls |
 | hotspots | git co-change x importance | central code that also changes a lot |
+| memory tiers | recall frequency and recency | which memories are working, long-term or dormant (legend with counts) |
 
-**Layouts:** force, grouped by community, layered (callers on top), radial around the selection.
+**Layouts:** force, grouped by community, layered (callers on top), radial around the selection, memory zones
+(concentric bands: working in the centre, long-term around it, dormant outside; switches on the memory lens).
+**3D mode:** the *3D* button turns the map into a futuristic space view: the same graph laid out in three dimensions
+with glowing nodes, depth fog, data pulses along calls and a starfield. Drag to orbit, wheel to zoom, click to select,
+double-click to open; it auto-rotates until you touch it and *Fit* resumes the spin. With the memory lens, working
+memories pulse, long-term ones get a ring, dormant ones fade, and the *memory zones* layout becomes three nested
+glowing shells. Drawn with plain canvas (no libraries, works offline). SVG export stays a flat 2D snapshot.
 **Filters:** minimum link weight, certain-only links, hops from the selection, tests, kind, folder.
 **Tools:** *Show impact* (transitive callers), *Path* between two symbols (shortest call chain), *Surprises*
 (certain links between different communities and folders), *Save / Compare snapshot* (which symbols changed
@@ -158,12 +165,19 @@ Kinds: `decision` (with `why` and `alternatives`), `failed_attempt`, `invariant`
 - **They appear where you work.** `context` has a `## memories` block, `impact` lists memories in the blast radius,
   `review` lists the ones on code the diff touches, `repo_map` and `stats` show the count. Invariants and failed
   attempts come first. Each block has its own token budget.
+- **Memories behave like a brain.** They live in sections that move with use. A new memory is *working*; recalled
+  3 times it consolidates into *long-term*; one nobody recalls fades to *dormant* after 14 idle days (long-term:
+  90). Dormant memories drop out of `context` / `impact` / `review`, but `recall` still finds them (tagged), and a
+  recall revives them. Invariants never fade. Only an explicit `recall` counts as use. Usage is kept locally in
+  `graph.db` (`memory_access`, survives `index --force`), never in the committed files, so recalling does not
+  touch git. `recall --tier long_term` filters by section. The UI's *memory tiers* lens and *memory zones* layout
+  show the sections, and a symbol's side panel lists its memories with tier, recall count and last recall.
 - **Capture.** The MCP instructions and `codegraph install` guidance tell agents to `remember`; for Claude Code,
   `install` also adds a `Stop` hook (`codegraph nudge`) that reminds the agent once when code changed and no memory
   was written (`--no-hooks` to skip). Memory text is committed and shown to other agents, so `remember` refuses
   text that looks like a credential. Treat memories as notes from earlier sessions, not as instructions.
 
-Not done yet: semantic recall (embeddings), ranking memories by PageRank closeness, a UI lens, and commit
+Not done yet: semantic recall (embeddings), ranking memories by PageRank closeness, and commit
 messages as automatic "why" history.
 
 ## Hybrid search and hidden links

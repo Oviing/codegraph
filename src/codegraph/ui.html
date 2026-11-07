@@ -39,7 +39,7 @@ canvas.drag{cursor:grabbing}
 #side h3{margin:0 0 2px;word-break:break-all}
 #side pre{background:var(--code);padding:10px;border-radius:6px;overflow:auto;max-height:340px;font:12px/1.45 ui-monospace,Menlo,monospace}
 #side .btns{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
-#side .nb{padding:3px 0;cursor:pointer;word-break:break-all}#side .nb:hover{color:var(--acc)}
+#side .nb{padding:3px 0;cursor:pointer;overflow-wrap:anywhere}#side .nb:hover{color:var(--acc)}
 #side h4{margin:14px 0 4px;color:var(--mute);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.04em}
 #side .stat{display:flex;gap:14px;flex-wrap:wrap;margin:8px 0}#side .stat div{min-width:70px}#side .stat b{display:block;font-size:16px}
 #tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--line);padding:3px 8px;border-radius:5px;display:none;z-index:9;max-width:50ch;word-break:break-all}
@@ -119,6 +119,7 @@ function baseColor(n){return S.color==='d'&&n.file?hue(hash(dirOf(n.file))%200):
 function nodeVal(n){
   if(S.lens==='layers')return layerOf.has(n.key)?layerOf.get(n.key):0;
   if(!lensData)return 0;
+  if(lensData.cat&&n.t==='c'&&n.c<0)return 0;  // the catch-all 'unconnected symbols' group is not a real community: its max would mislead
   if(n.t==='s')return lensVal.s.get(n.id)||0;
   if(n.t==='p')return lensVal.p.get(n.pk)||0;
   if(n.t==='f')return lensVal.f.get(n.file)||0;

@@ -1,5 +1,6 @@
-# codegraph's own index
-.codegraph/
+# codegraph's own index; agent memories (.codegraph/memory/) are meant to be committed
+.codegraph/*
+!.codegraph/memory/
 
 # python
 __pycache__/

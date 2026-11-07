@@ -10,6 +10,7 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
+from . import memory
 from .links import is_test_path
 
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -115,6 +116,10 @@ def review(graph, base: str = "", max_tokens: int = 1500) -> str:
     if missing:
         out.append("usually changes together with this diff, but untouched: "
                    + ", ".join(f"{m} ({w:.2f})" for m, w in missing[:5]))
+    mems = memory.related(db, {r["id"] for r in touched}, set(files))
+    if mems:
+        out.append(memory.section("memories on the code this diff touches (still valid? "
+                                  "update with forget / remember):", mems, max_tokens // 3))
     if deleted:
         out.append("deleted: " + ", ".join(deleted[:8]))
     if unindexed:

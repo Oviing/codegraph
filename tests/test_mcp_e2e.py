@@ -87,6 +87,8 @@ def test_every_tool_can_actually_be_invoked(repo):
         ("impact", {"symbol": "b"}),
         ("deps", {"file": "m.py"}),
         ("stats", {}),
+        ("remember", {"text": "keep a simple", "about": "a", "why": "tested"}),
+        ("recall", {"about": "a"}),
         ("reindex", {}),
     ]
 

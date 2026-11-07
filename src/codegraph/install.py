@@ -30,6 +30,12 @@ of reading whole files or grepping:
    blast radius, untested changes).
 4. `callers` / `callees` / `related` / `deps` to walk the graph.
 
+5. Memory: `recall <symbol or file>` before changing code (the `## memories` block of `context` and the
+   memories shown by `impact` / `review` come from it). After a non-obvious decision, a failed attempt or a
+   constraint you discovered, `remember` it with `about=` the symbols/files, plus `why` and `alternatives`.
+   Memories marked `[stale]` were written for older code: re-check them, then `forget` or re-`remember`.
+   They live in `.codegraph/memory/*.md`; commit that folder to share them.
+
 Edges tagged `[inferred]` or `[ambiguous]` (or `?` in `impact`) are name-based guesses, so treat them as
 upper bounds and confirm by reading the code. Read files directly only for exact surrounding code.
 
@@ -44,6 +50,11 @@ description: Navigate this codebase through its code graph (symbols, callers, im
 ---
 
 {GUIDE}"""
+
+STOP_REASON = ("You changed code in this session. If you made a non-obvious decision, hit a failed attempt "
+               "or found an invariant, record it now with codegraph `remember` (about=<symbols>, why=..., "
+               "alternatives=...). If there is nothing worth keeping, just finish.")
+STOP_COMMAND = f"codegraph -r . nudge # {NUDGE_MARK}"
 
 NUDGE = ("codegraph is available for this repo: try repo_map / search / context before grepping or "
          "reading whole files (CLI: codegraph search <query>).")
@@ -105,6 +116,15 @@ def _claude_hook(root: Path, report: list[str]):
     _write(path, json.dumps(data, indent=2) + "\n", report, ".claude/settings.json (Glob|Grep hint)")
 
 
+def _claude_stop_hook(root: Path, report: list[str]):
+    path = root / ".claude" / "settings.json"
+    data = _load_json(path)
+    entry = {"hooks": [{"type": "command", "command": STOP_COMMAND}]}
+    stop = data.setdefault("hooks", {}).setdefault("Stop", [])
+    stop[:] = [e for e in stop if NUDGE_MARK not in json.dumps(e)] + [entry]
+    _write(path, json.dumps(data, indent=2) + "\n", report, ".claude/settings.json (memory reminder on Stop)")
+
+
 def install(root: str | Path, platform: str = "all", hooks: bool = True) -> list[str]:
     root = Path(root).resolve()
     chosen = PLATFORMS if platform == "all" else (platform,)
@@ -120,6 +140,7 @@ def install(root: str | Path, platform: str = "all", hooks: bool = True) -> list
             _upsert_block(root / "CLAUDE.md", GUIDE, report, "CLAUDE.md (guidance block)")
             if hooks:
                 _claude_hook(root, report)
+                _claude_stop_hook(root, report)
         elif p == "cursor":
             rule = ("---\ndescription: Navigate the codebase with codegraph before reading files\n"
                     f"alwaysApply: true\n---\n\n{GUIDE}")
@@ -160,8 +181,9 @@ def uninstall(root: str | Path) -> list[str]:
     path = root / ".claude" / "settings.json"
     if path.exists() and NUDGE_MARK in path.read_text():
         data = _load_json(path)
-        pre = data.get("hooks", {}).get("PreToolUse", [])
-        pre[:] = [e for e in pre if NUDGE_MARK not in json.dumps(e)]
+        for event in ("PreToolUse", "Stop"):
+            entries = data.get("hooks", {}).get(event, [])
+            entries[:] = [e for e in entries if NUDGE_MARK not in json.dumps(e)]
         path.write_text(json.dumps(data, indent=2) + "\n")
         report.append("cleaned    .claude/settings.json")
     return report or ["nothing to remove"]
@@ -217,3 +239,23 @@ def hook_uninstall(root: str | Path) -> list[str]:
             path.write_text(rest + "\n")
         report.append(f"removed    {os.path.relpath(path, root)}")
     return report or ["no codegraph hooks found"]
+
+
+def stop_nudge(root: str | Path, stdin_text: str) -> str:
+    """Body of the Claude Code Stop hook. Blocks the stop once, and only when code changed in the working
+    tree without any memory file being added or edited. Returns the JSON to print ('' = let it stop)."""
+    try:
+        if json.loads(stdin_text or "{}").get("stop_hook_active"):
+            return ""  # already nudged this turn: never loop
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    try:
+        p = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    changed = [ln[3:] for ln in p.stdout.splitlines() if ln[3:].strip()]
+    code = [f for f in changed if not f.startswith((".codegraph/", ".claude/"))]
+    if p.returncode != 0 or not code or any(f.startswith(".codegraph/memory/") for f in changed):
+        return ""
+    return json.dumps({"decision": "block", "reason": STOP_REASON})

@@ -21,6 +21,9 @@ INSTRUCTIONS = (
     "start with repo_map, find code with search, then call context(symbol) to get a symbol's source, "
     "the signatures it uses and who uses it in one compact response. Use impact(symbol) before changing "
     "a function, and similar(symbol) to find code that does the same thing under different names. "
+    "Check the '## memories' block (or recall) before changing code: it holds earlier decisions, failed "
+    "attempts and invariants, and '[stale]' means the code changed since. After a non-obvious decision, a "
+    "failed attempt or a discovered constraint, call remember(about=<symbols>, why=..., alternatives=...). "
     "Fall back to reading files only for exact surrounding code."
 )
 

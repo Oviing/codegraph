@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import functools
 import math
+import os
 import re
 import sys
 import threading
 from collections import defaultdict, deque
 from pathlib import Path
 
+from . import memory
 from .embed import load_embedder, load_matrix, symbol_text
 from .indexer import db_path
 from .links import is_test_path
@@ -270,7 +272,10 @@ class Graph:
                 break
             out.append(block)
             used += toks(block)
-        return note + "\n".join(out) if out else "Index is empty. Run reindex()."
+        if not out:
+            return "Index is empty. Run reindex()."
+        mem = memory.summary(db)
+        return note + "\n".join(out) + (f"\n{mem}" if mem else "")
 
     @synchronized
     def _search_rows(self, query: str, limit: int):
@@ -482,8 +487,12 @@ class Graph:
         for d, ns in levels.items():
             for n in ns:
                 files[n["file"]].append((d, n["qualname"] + ("" if n["conf"] == "extracted" else "?")))
+        ids = {r["id"]} | {n["id"] for ns in levels.values() for n in ns}
+        mem = memory.section("recorded memories in this blast radius (still valid after your change?):",
+                             memory.related(self.db, ids, {r["file"], *files}), 300)
+        mem = f"\n{mem}" if mem else ""
         if not files:
-            return f"Nothing depends on {r['qualname']} (static analysis)."
+            return f"Nothing depends on {r['qualname']} (static analysis)." + mem
         total = sum(len(v) for v in files.values())
         plural = "symbol" if total == 1 else "symbols"
         out = [f"changing {r['qualname']} may affect {total} {plural} in {len(files)} file(s)"
@@ -492,7 +501,7 @@ class Graph:
             items.sort()
             out.append(f"  {f}: " + ", ".join(f"{q[:-1] if q.endswith('?') else q}(d{d}{'?' if q.endswith('?') else ''})" for d, q in items[:8]) +
                        (f", +{len(items) - 8} more" if len(items) > 8 else ""))
-        return "\n".join(out)
+        return "\n".join(out) + mem
 
     @staticmethod
     def _link_label(kind: str, forward: bool) -> str:
@@ -567,6 +576,10 @@ class Graph:
             p = self.db.execute("SELECT * FROM symbols WHERE id=?", (r["parent"],)).fetchone()
             if p and p["kind"] not in ("module", "namespace"):
                 parts.append(f"## inside\n{p['file']}:{p['line_start']}  {p['sig'] or p['qualname']}")
+        mems = memory.related(self.db, {r["id"], r["parent"]} - {None}, {r["file"]})
+        if mems:
+            parts.append(memory.section("## memories (decisions, failed attempts, invariants recorded here)",
+                                        mems, max(100, max_tokens // 4)))
         remaining = max_tokens - toks("\n".join(parts)) - 20
         picked = self._related(r, max(remaining, 0))
         for rel, title in (("uses", "## uses"), ("used by", "## used by"), ("tested by", "## tested by"),
@@ -629,11 +642,13 @@ class Graph:
             return db.execute(sql).fetchone()[0]
 
         conf = dict(db.execute("SELECT conf, COUNT(*) FROM edges GROUP BY conf").fetchall())
+        mem = memory.summary(db)
         return (f"{q('SELECT COUNT(*) FROM files')} files, {q('SELECT COUNT(*) FROM symbols')} symbols, "
                 f"{q('SELECT COUNT(*) FROM edges')} edges ({conf.get('extracted', 0)} extracted, "
                 f"{conf.get('inferred', 0)} inferred, {conf.get('ambiguous', 0)} ambiguous), "
                 f"{q('SELECT COUNT(*) FROM imports')} file imports, "
-                f"{q('SELECT COUNT(DISTINCT community) FROM symbols WHERE community>=0')} communities")
+                f"{q('SELECT COUNT(DISTINCT community) FROM symbols WHERE community>=0')} communities"
+                + (f", {mem}" if mem else ""))
 
     @synchronized
     def report(self, max_tokens: int = 1500) -> str:
@@ -655,3 +670,111 @@ class Graph:
             index_repo(self.root)  # the diff is the working tree, so the index must be too
             self.reload()
             return review(self, base, max_tokens)
+
+    # ---------- agent memory ----------
+    def _memory_refresh(self):
+        """Pick up memory files added by git or by hand, and re-judge staleness against the current code."""
+        memory.update(self.db, self.root)
+        self.db.commit()
+
+    @synchronized
+    def _anchors(self, about: str):
+        """`about` (comma separated symbols or files) -> (stable anchors, error)."""
+        anchors: list[str] = []
+        cache: dict = {}
+        for term in [t.strip() for t in about.split(",") if t.strip()]:
+            rows = self._find(term)
+            if len(rows) > 1:
+                self.status = "ambiguous"
+                lines = "\n".join(self._line(x) for x in rows[:10])
+                return None, f"'{term}' is ambiguous ({len(rows)} matches). Use qualname or file:name:\n{lines}"
+            if rows:
+                x = rows[0]
+                anchors.append(f"{x['file']}::{x['qualname']}#{memory.symbol_hash(self.root, x, cache)}")
+                continue
+            f = self._resolve_file(term)
+            if f is None:
+                self.status = "missing"
+                return None, f"No symbol or file matches '{term}'. Try search()."
+            anchors.append(f)
+        return list(dict.fromkeys(anchors)), ""
+
+    @synchronized
+    def remember(self, text: str, about: str = "", kind: str = "decision", why: str = "",
+                 alternatives: str = "", title: str = "") -> str:
+        """Record a decision, failed attempt, invariant or intent, anchored to symbols/files in `about`."""
+        self.status = "ok"
+        kind = (kind or "decision").strip().lower()
+        if kind not in memory.KINDS:
+            return f"Unknown kind '{kind}'. Use one of: {', '.join(memory.KINDS)}."
+        text = text.strip()
+        if not text:
+            return "Nothing to remember: text is empty."
+        anchors, err = self._anchors(about)
+        if err:
+            return err
+        title = " ".join((title.strip() or text.splitlines()[0]).split())[:80]
+        author = os.environ.get("CODEGRAPH_AUTHOR", "agent")
+        try:
+            mid = memory.write(self.root, kind=kind, title=title, text=text, why=why,
+                               alternatives=alternatives, anchors=anchors, author=author)
+        except memory.SecretError as e:
+            return str(e)
+        self._memory_refresh()
+        where = ", ".join(a.partition("#")[0] for a in anchors) or "repo-wide (no anchor)"
+        return f"remembered {mid} [{kind}] {title}\nanchored to: {where}"
+
+    @synchronized
+    def recall(self, query: str = "", about: str = "", kind: str = "", limit: int = 10) -> str:
+        """Memories anchored to `about` (and to its direct callers/callees), matching `query`, or the latest."""
+        self.status = "ok"
+        self._memory_refresh()
+        kind = kind.strip().lower()
+        limit = max(1, min(limit, 50))
+        ids: list[str] = []
+
+        def add(mems):
+            ids.extend(m["id"] for m in mems if m["id"] not in ids and (not kind or m["kind"] == kind))
+
+        if about.strip():
+            sym_ids, files = set(), set()
+            for term in [t.strip() for t in about.split(",") if t.strip()]:
+                rows = self._find(term)
+                if rows:
+                    sym_ids |= {x["id"] for x in rows}
+                    continue
+                f = self._resolve_file(term)
+                if f is None:
+                    self.status = "missing"
+                    return f"No symbol or file matches '{term}'. Try search()."
+                files.add(f)
+            near = {v for s_ in sym_ids for v in self._out.get(s_, []) + self._in.get(s_, [])} - sym_ids
+            add(memory.related(self.db, sym_ids, files))
+            add(memory.related(self.db, near, set()))
+        if query.strip():
+            ids.extend(i for i in memory.search(self.db, query, kind, limit) if i not in ids)
+        if not about.strip() and not query.strip():
+            ids = memory.recent(self.db, kind, limit)
+        if not ids:
+            return "No matching memories." if self.db.execute("SELECT 1 FROM memories").fetchone() \
+                else "No memories yet. Record one with remember()."
+        mems = memory.load(self.db, ids[:limit])
+        return "\n".join(memory.card(m) for m in mems) + (f"\n... {len(ids) - limit} more" if len(ids) > limit else "")
+
+    @synchronized
+    def forget(self, id: str, superseded_by: str = "") -> str:
+        """Retire a memory (or mark it superseded by another). The file stays, as an audit trail."""
+        self.status = "ok"
+        if superseded_by.strip():
+            new = memory.find_file(self.root, superseded_by.strip())
+            if new is None:
+                self.status = "missing"
+                return f"No memory matches '{superseded_by}'."
+            superseded_by = new.stem
+        mid = memory.set_status(self.root, id.strip(), "superseded" if superseded_by else "retired",
+                                superseded_by)
+        if mid is None:
+            self.status = "missing"
+            return f"No memory matches '{id}' (needs the full id or a unique prefix)."
+        self._memory_refresh()
+        return f"{mid} is now {'superseded by ' + superseded_by if superseded_by else 'retired'}"

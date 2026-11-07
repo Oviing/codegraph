@@ -10,7 +10,7 @@ from pathlib import Path
 from .parser import Parsed
 from .rank import pagerank
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, lang TEXT, hash TEXT, loc INT);
@@ -48,6 +48,18 @@ CREATE INDEX IF NOT EXISTS ix_fl_b ON file_links(b);
 CREATE TABLE IF NOT EXISTS sym_vec(sym_id INTEGER PRIMARY KEY, hash TEXT);
 CREATE TABLE IF NOT EXISTS vec_cache(hash TEXT PRIMARY KEY, vec BLOB);
 CREATE VIRTUAL TABLE IF NOT EXISTS sym_fts USING fts5(name, words, qualname, doc);
+-- agent memories. The files in .codegraph/memory/ are the source of truth; these tables are an index of
+-- them. Anchors are stable (file + qualname + source hash); memory_links is rebuilt after every index
+-- because symbol ids are not stable. state: ok | stale (source changed) | orphaned (anchor gone)
+CREATE TABLE IF NOT EXISTS memories(
+  id TEXT PRIMARY KEY, hash TEXT, kind TEXT, title TEXT, body TEXT, why TEXT, alternatives TEXT,
+  status TEXT, superseded_by TEXT, author TEXT, commit_sha TEXT, created TEXT);
+CREATE TABLE IF NOT EXISTS memory_anchors(mem_id TEXT, file TEXT, qualname TEXT, src_hash TEXT);
+CREATE INDEX IF NOT EXISTS ix_ma_mem ON memory_anchors(mem_id);
+CREATE TABLE IF NOT EXISTS memory_links(mem_id TEXT, file TEXT, sym_id INT, state TEXT);
+CREATE INDEX IF NOT EXISTS ix_ml_mem ON memory_links(mem_id);
+CREATE INDEX IF NOT EXISTS ix_ml_sym ON memory_links(sym_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(mem_id UNINDEXED, title, body, kind);
 """
 
 
@@ -77,7 +89,12 @@ def _migration_3(db: sqlite3.Connection) -> bool:
     return changed
 
 
-MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3}
+def _migration_4(db: sqlite3.Connection) -> bool:
+    """Agent memory tables: created by SCHEMA, which is idempotent. Nothing to alter."""
+    return False
+
+
+MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4}
 
 TARGET_KINDS_CALL = {"function", "method", "class", "struct", "type", "interface", "trait", "enum",
                      "table", "view", "procedure"}  # SQL objects, referenced from docs and other SQL
@@ -347,7 +364,8 @@ class Store:
         """Drop every derived row (not the embedding cache, which is keyed by content hash).
         A forced rebuild is far cheaper this way than deleting file by file."""
         for t in ("files", "symbols", "raw_edges", "edges", "raw_imports", "imports", "raw_keys",
-                  "links", "file_links", "sym_vec", "sym_fts"):
+                  "links", "file_links", "sym_vec", "sym_fts", "memories", "memory_anchors",
+                  "memory_links", "memory_fts"):
             self.db.execute(f"DELETE FROM {t}")
 
     def delete_file(self, path: str):

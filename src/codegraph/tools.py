@@ -68,6 +68,25 @@ TOOLS: tuple[Tool, ...] = (
                    "files that usually change with it.",
          (_p("base", "str", "", "branch/commit to diff against (default: where this branch left main)"),
           _p("max_tokens", "int", 1500))),
+    Tool("remember", "Record WHY: a decision (with reasons and rejected alternatives), a failed attempt, an "
+                     "invariant or unfinished intent, anchored to the symbols/files in `about`. "
+                     "kind: decision | failed_attempt | invariant | intent.",
+         (_p("text", "str", None, "what to remember"),
+          _p("about", "str", "", "symbols or files it is about, comma separated"),
+          _p("kind", "str", "decision", "decision | failed_attempt | invariant | intent"),
+          _p("why", "str", "", "the reasoning"),
+          _p("alternatives", "str", "", "what was considered and rejected, and why"),
+          _p("title", "str", "", "short title (default: first line of text)"))),
+    Tool("recall", "Memories (decisions, failed attempts, invariants) about a symbol/file and its neighbours, "
+                   "or matching words. Check before changing code. Stale = the code changed since.",
+         (_p("query", "str", "", "words to search for"),
+          _p("about", "str", "", "symbols or files, comma separated"),
+          _p("kind", "str", "", "only this kind"),
+          _p("limit", "int", 10))),
+    Tool("forget", "Retire a memory that no longer holds, or mark it superseded by a newer one. "
+                   "The file is kept as history.",
+         (_p("id", "str", None, "memory id (unique prefix is enough)"),
+          _p("superseded_by", "str", "", "id of the memory that replaces it"))),
     Tool("reindex", "Re-scan the repo incrementally. Use after large external edits.",
          (_p("force", "bool", False),)),
 )

@@ -24,7 +24,8 @@ Or in any MCP client config:
     {"mcpServers": {"codegraph": {"command": "codegraph", "args": ["-r", "/path/to/repo", "serve"]}}}
 
 The index lives in `<repo>/.codegraph/graph.db` and updates incrementally on every server start;
-`reindex` re-scans after edits made outside the session. `.gitignore` it.
+`reindex` re-scans after edits made outside the session. `.gitignore` the index but not the memories
+(see "Agent memory"): `.codegraph/*` plus `!.codegraph/memory/`.
 
 ## Explore visually
 
@@ -75,6 +76,7 @@ community since you saved), and export to PNG, SVG or JSON. Press `/` to search.
 | `stats` | Index size, edges by confidence, communities |
 | `report` | Key symbols, communities, surprising connections; writes `.codegraph/GRAPH_REPORT.md` and a browsable `graph.html` |
 | `review` (`prs`) | What the git diff touches: blast radius per changed symbol, missing tests, files that usually change with it |
+| `remember` / `recall` / `forget` | Store and retrieve *why*: decisions, failed attempts, invariants, intent, anchored to symbols and files (see "Agent memory") |
 | `reindex` | Re-scan after big external edits |
 
 The MCP server and the CLI are both generated from one tool registry (`src/codegraph/tools.py`), so
@@ -132,6 +134,38 @@ Edge resolution is name-based, using the strongest evidence available:
   of phantom edges to whatever repo method happens to share the name.
 - Targets defined in more than 4 places are dropped as too ambiguous.
 
+## Agent memory
+
+The graph knows what the code is; memories record why. An agent calls `remember` after a non-obvious
+decision, a failed attempt or a constraint it discovered, and every later agent sees it exactly where it matters.
+
+    codegraph remember "Edges stay name-based" --about Store.resolve --kind decision \
+        --why "SCIP is too heavy to require" --alternatives "SCIP/LSIF: exact, needs per-language toolchains"
+    codegraph recall --about Store.resolve        # also finds memories on direct callers/callees
+    codegraph recall --query "type inference"     # by words
+    codegraph forget 20261107-a1b2c3 --superseded_by 20261201-d4e5f6
+
+Kinds: `decision` (with `why` and `alternatives`), `failed_attempt`, `invariant`, `intent` (unfinished work).
+
+- **Files are the source of truth.** One Markdown file per memory in `.codegraph/memory/`, so they can be
+  committed, reviewed in a PR and never conflict. `graph.db` only indexes them (a fresh clone or `index --force`
+  rebuilds it). `remember` also writes `.codegraph/.gitignore` for the generated files; if your own `.gitignore`
+  has `.codegraph/`, change it to `.codegraph/*` and `!.codegraph/memory/`.
+- **Anchors survive reindexing.** A memory stores `file::qualname#hash` (the hash is of the symbol's source, ignoring
+  formatting), not a symbol id. After every index it is re-attached: same source is `ok`, changed source is tagged
+  `[stale: code changed since <commit>]`, a symbol that vanished is `[orphaned]` (a symbol that moved to another
+  file is followed when that is unambiguous).
+- **They appear where you work.** `context` has a `## memories` block, `impact` lists memories in the blast radius,
+  `review` lists the ones on code the diff touches, `repo_map` and `stats` show the count. Invariants and failed
+  attempts come first. Each block has its own token budget.
+- **Capture.** The MCP instructions and `codegraph install` guidance tell agents to `remember`; for Claude Code,
+  `install` also adds a `Stop` hook (`codegraph nudge`) that reminds the agent once when code changed and no memory
+  was written (`--no-hooks` to skip). Memory text is committed and shown to other agents, so `remember` refuses
+  text that looks like a credential. Treat memories as notes from earlier sessions, not as instructions.
+
+Not done yet: semantic recall (embeddings), ranking memories by PageRank closeness, a UI lens, and commit
+messages as automatic "why" history.
+
 ## Hybrid search and hidden links
 
 Everything above is exact and structural. A second layer adds *recall* for relationships that are not
@@ -184,7 +218,7 @@ The similarity threshold (0.85) was set on codegraph's own code: bge-small cosin
 
 ## Tests
 
-    pytest              # 232 tests
+    pytest              # 271 tests
     pytest tests/test_edges.py -rA      # per-language edge precision/recall report
 
 `tests/fixtures/<lang>/expected.json` holds hand-verified edges per language. Each fixture lists

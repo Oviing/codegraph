@@ -8,7 +8,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-from . import community, embed, links
+from . import community, embed, links, memory
 from .docs import DOC_EXT, DOC_LANGS, parse_doc
 from .parser import EXT, parse
 from .store import SCHEMA_VERSION, Store, recompute_rank
@@ -180,6 +180,7 @@ def index_repo(root: str | Path, force: bool = False, progress=None) -> dict:
         link_stats["communities"] = community.detect(store.db)
     link_stats["embed"] = embed.update(store, note)
     link_stats["cochange"] = links.link_cochange(store, root, force)  # -1: unchanged, 0: no git
+    link_stats["memories"] = memory.update(store.db, root)  # files -> tables, anchors -> current symbols
     store.commit()
     db = store.db
     n_sym = db.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]

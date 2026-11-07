@@ -6,7 +6,7 @@ import json
 import sys
 
 from .indexer import index_repo
-from .install import PLATFORMS, hook_install, hook_uninstall, install, uninstall
+from .install import PLATFORMS, hook_install, hook_uninstall, install, stop_nudge, uninstall
 from .queries import Graph
 from .tools import CLI_ALIASES, CLI_FLAGS, TOOLS
 
@@ -58,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     inst.add_argument("--uninstall", action="store_true", help="remove what install wrote")
     hk = sub.add_parser("hook", help="keep the index fresh from git: post-commit/checkout/merge hooks")
     hk.add_argument("action", choices=("install", "uninstall"))
+
+    sub.add_parser("nudge", help="Claude Code Stop hook: remind the agent to record decisions (reads stdin)")
 
     for tool in TOOLS:
         spellings = CLI_SPELLINGS[tool.name]
@@ -114,6 +116,12 @@ def main(argv=None):
         else:
             lines = install(args.root, args.platform, hooks=not args.no_hooks)
         print("\n".join(lines))
+        return None
+
+    if args.cmd == "nudge":
+        out = stop_nudge(args.root, "" if sys.stdin.isatty() else sys.stdin.read())
+        if out:
+            print(out)
         return None
 
     if args.cmd == "index":
